@@ -12,6 +12,10 @@ jobs:
   build:
     name: Build aarch64 deployment package
     runs-on: ubuntu-22.04
+    env:
+      TARGET_TRIPLE: aarch64-linux-gnu
+      TARGET_GLIBC: '2.17'
+      ZIG_VERSION: 0.13.0
 
     steps:
       - name: Check out source
@@ -30,67 +34,70 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build backend with target-compatible glibc toolchain
+      - name: Install ABI-pinned cross toolchain
         run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/workspace" \
-            -w /workspace/src \
-            ubuntu:20.04 \
-            bash -lc '
-              set -eux
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl ca-certificates xz-utils perl
-              make clean
-              make
-              cd /tmp
-              curl -fsSLO https://www.openssl.org/source/old/1.1.1/openssl-1.1.1w.tar.gz
-              tar -xzf openssl-1.1.1w.tar.gz
-              cd openssl-1.1.1w
-              ./Configure linux-aarch64 no-shared no-tests \
-                --cross-compile-prefix=aarch64-linux-gnu- \
-                --prefix=/tmp/curl-deps
-              make -j2 build_libs
-              make install_sw
-              cd /tmp
-              curl -fsSLO https://curl.se/download/curl-7.88.1.tar.xz
-              tar -xf curl-7.88.1.tar.xz
-              cd curl-7.88.1
-              ./configure \
-                --host=aarch64-linux-gnu \
-                --prefix=/tmp/curl-install \
-                --with-openssl=/tmp/curl-deps \
-                --disable-shared \
-                --enable-static \
-                --without-zlib \
-                --without-libpsl \
-                --without-nghttp2 \
-                --without-brotli \
-                --without-zstd \
-                --without-libidn2 \
-                --disable-ldap \
-                --disable-ldaps \
-                --disable-rtsp \
-                --disable-dict \
-                --disable-telnet \
-                --disable-tftp \
-                --disable-pop3 \
-                --disable-imap \
-                --disable-smb \
-                --disable-gopher \
-                --disable-mqtt \
-                CPPFLAGS=-I/tmp/curl-deps/include \
-                LDFLAGS=-L/tmp/curl-deps/lib \
-                LIBS="-ldl -lpthread"
-              make -j2
-              make install
-              install -Dm755 /tmp/curl-install/bin/curl /workspace/.ci/curl
-            '
+          curl -fsSLO "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          tar -xf "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          mv "zig-linux-x86_64-${ZIG_VERSION}" .zig
+          echo "$GITHUB_WORKSPACE/.zig" >> "$GITHUB_PATH"
+
+      - name: Build backend for glibc 2.17
+        run: |
+          target="${TARGET_TRIPLE}.${TARGET_GLIBC}"
+          make -C src clean
+          make -C src CC="zig cc -target ${target}" STRIP="zig strip"
           file src/build/ofono-server
-          file .ci/curl
-          sudo apt-get update
-          sudo apt-get install --yes binutils-aarch64-linux-gnu file
-          aarch64-linux-gnu-readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
-          aarch64-linux-gnu-readelf -h .ci/curl | grep -q 'Machine:.*AArch64'
+          readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
+          ! readelf --version-info src/build/ofono-server | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])'
+
+      - name: Build SMTP curl for glibc 2.17
+        run: |
+          target="${TARGET_TRIPLE}.${TARGET_GLIBC}"
+          export CC="zig cc -target ${target}"
+          export AR="zig ar"
+          export RANLIB="zig ranlib"
+          curl -fsSLO https://www.openssl.org/source/old/1.1.1/openssl-1.1.1w.tar.gz
+          tar -xzf openssl-1.1.1w.tar.gz
+          cd openssl-1.1.1w
+          ./Configure linux-aarch64 no-shared no-tests --prefix="$GITHUB_WORKSPACE/.ci/curl-deps"
+          make -j2 build_libs
+          make install_sw
+          cd "$GITHUB_WORKSPACE"
+          curl -fsSLO https://curl.se/download/curl-7.88.1.tar.xz
+          tar -xf curl-7.88.1.tar.xz
+          cd curl-7.88.1
+          ./configure \
+            --host="$TARGET_TRIPLE" \
+            --prefix="$GITHUB_WORKSPACE/.ci/curl-install" \
+            --with-openssl="$GITHUB_WORKSPACE/.ci/curl-deps" \
+            --disable-shared \
+            --enable-static \
+            --without-zlib \
+            --without-libpsl \
+            --without-nghttp2 \
+            --without-brotli \
+            --without-zstd \
+            --without-libidn2 \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-gopher \
+            --disable-mqtt \
+            CPPFLAGS="-I$GITHUB_WORKSPACE/.ci/curl-deps/include" \
+            LDFLAGS="-L$GITHUB_WORKSPACE/.ci/curl-deps/lib" \
+            LIBS="-ldl -lpthread"
+          make -j2
+          make install
+          install -Dm755 "$GITHUB_WORKSPACE/.ci/curl-install/bin/curl" "$GITHUB_WORKSPACE/.ci/curl"
+          file "$GITHUB_WORKSPACE/.ci/curl"
+          readelf -h "$GITHUB_WORKSPACE/.ci/curl" | grep -q 'Machine:.*AArch64'
+          ! readelf --version-info "$GITHUB_WORKSPACE/.ci/curl" | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])'
 
       - name: Assemble deployment package
         env:

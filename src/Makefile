@@ -1,6 +1,7 @@
 # Makefile for ofono-server - Cross compile for aarch64-linux-gnu
 
-CC = aarch64-linux-gnu-gcc
+CC ?= aarch64-linux-gnu-gcc
+STRIP ?= aarch64-linux-gnu-strip
 # 移除 -DDISABLE_PRINTF 以启用调试输出
 # 添加 -DDISABLE_PRINTF 禁用所有printf输出
 # 添加 -DMG_ENABLE_IPV6=1 启用IPv6支持
@@ -46,7 +47,7 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
-	aarch64-linux-gnu-strip $@
+	$(STRIP) $@
 	@echo "Build complete: $@"
 
 # 主目录源文件
