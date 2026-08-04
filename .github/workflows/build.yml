@@ -45,7 +45,7 @@ jobs:
         run: |
           target="${TARGET_TRIPLE}.${TARGET_GLIBC}"
           make -C src clean
-          make -C src CC="zig cc -target ${target}" STRIP=:
+          make -C src CC="zig cc -target ${target}" STRIP=: RPATH_LINK=
           file src/build/ofono-server
           readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
           ! readelf --version-info src/build/ofono-server | grep -Eq 'GLIBC_2\.(2[89]|[3-9][0-9])'

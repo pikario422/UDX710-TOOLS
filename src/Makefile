@@ -14,7 +14,8 @@ INCLUDES = -I$(GLIB_DIR)/include/glib-2.0 \
            -I$(GLIB_DIR)/include/gio-unix-2.0 \
            -I. -Iinclude -Iinclude/system -Iinclude/handlers -Iinclude/lib
 
-LDFLAGS = -L$(GLIB_DIR)/lib -Wl,-rpath-link,$(GLIB_DIR)/lib -Wl,--allow-shlib-undefined
+RPATH_LINK ?= -Wl,-rpath-link,$(GLIB_DIR)/lib
+LDFLAGS = -L$(GLIB_DIR)/lib $(RPATH_LINK) -Wl,--allow-shlib-undefined
 LIBS = -lgio-2.0 -lgobject-2.0 -lglib-2.0 -lgmodule-2.0 -lpthread
 
 BUILD_DIR = build
