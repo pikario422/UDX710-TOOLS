@@ -10,60 +10,12 @@
 #include <gio/gio.h>
 #include "airplane.h"
 #include "sysinfo.h"
+#include "dbus_core.h"
 #include "ofono.h"
 #include "modem_profile.h"
 
 int send_at(const char *cmd, char **result) {
-    GDBusConnection *conn = NULL;
-    GVariant *ret = NULL;
-    GError *error = NULL;
-    int rc = -1;
-    char slot[16], ril_path[64];
-
-    if (!cmd || !result) return -1;
-    *result = NULL;
-
-    /* 获取当前 RIL 路径 */
-    if (get_current_slot(slot, ril_path) != 0 || strcmp(ril_path, "unknown") == 0) {
-        strncpy(ril_path, modem_profile_default_modem_path(), sizeof(ril_path) - 1);
-        ril_path[sizeof(ril_path) - 1] = '\0';
-    }
-
-    /* 连接系统 D-Bus */
-    conn = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
-    if (!conn) {
-        if (error) g_error_free(error);
-        return -1;
-    }
-
-    /* 调用 SendAtcmd */
-    ret = g_dbus_connection_call_sync(
-        conn,
-        "org.ofono",
-        ril_path,
-        "org.ofono.Modem",
-        "SendAtcmd",
-        g_variant_new("(s)", cmd),
-        G_VARIANT_TYPE("(s)"),
-        G_DBUS_CALL_FLAGS_NONE,
-        8000,  /* 8秒超时 */
-        NULL,
-        &error
-    );
-
-    if (ret) {
-        const gchar *res_str = NULL;
-        g_variant_get(ret, "(s)", &res_str);
-        if (res_str) {
-            *result = g_strdup(res_str);
-            rc = 0;
-        }
-        g_variant_unref(ret);
-    }
-
-    if (error) g_error_free(error);
-    g_object_unref(conn);
-    return rc;
+    return execute_at(cmd, result);
 }
 
 
@@ -71,7 +23,8 @@ int get_airplane_mode(void) {
     char *result = NULL;
     int mode = -1;
 
-    if (send_at("AT+CFUN?", &result) == 0 && result) {
+    const char *command = modem_profile_command(MODEM_CMD_AIRPLANE_QUERY);
+    if (command[0] && send_at(command, &result) == 0 && result) {
         if (strstr(result, "+CFUN: 0")) {
             mode = 1;  /* 飞行模式开启 */
         } else {
@@ -100,7 +53,8 @@ int get_iccid(char *iccid, size_t size) {
     char *result = NULL;
     int rc = -1;
 
-    if (send_at("AT+CCID", &result) != 0 || !result) return -1;
+    const char *command = modem_profile_command(MODEM_CMD_ICCID_QUERY);
+    if (!command[0] || send_at(command, &result) != 0 || !result) return -1;
 
     /* 解析 +CCID: "xxx" 或纯数字行 */
     char *lines = result;
@@ -203,7 +157,8 @@ int get_imsi(char *imsi, size_t size) {
     char *result = NULL;
     int rc = -1;
 
-    if (send_at("AT+CIMI", &result) != 0 || !result) return -1;
+    const char *command = modem_profile_command(MODEM_CMD_IMSI_QUERY);
+    if (!command[0] || send_at(command, &result) != 0 || !result) return -1;
 
     /* 解析响应，提取 15 位数字 */
     char *lines = result;

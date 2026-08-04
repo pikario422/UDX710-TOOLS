@@ -1,8 +1,8 @@
 <script setup>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, provide, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import GlobalConfirm from './components/GlobalConfirm.vue'
 import GlobalToast from './components/GlobalToast.vue'
-import { authGetStatus, authLogin, clearAuthToken, fetchSystemInfo, getCurrentBand } from './composables/useApi'
+import { authFetch, authGetStatus, authLogin, authLogout, clearAuthToken, fetchSystemInfo, getCurrentBand } from './composables/useApi'
 
 const FeaturePage = defineAsyncComponent(() => import('./components/FeaturePage.vue'))
 
@@ -10,8 +10,9 @@ const groups = [
   {
     label: '工作台',
     items: [
-      { id: 'overview', label: '设备概览', icon: 'gauge-high', description: '设备状态、蜂窝信号与资源使用情况' },
-      { id: 'monitor', label: '设备监控', icon: 'heartbeat', description: '查看硬件、模组和运行状态详情' }
+      { id: 'overview', label: '设备概览', icon: 'gauge-high', description: '连接状态与设备资源摘要' },
+      { id: 'modem', label: '模组监控', icon: 'tower-cell', description: '模组、SIM 卡与蜂窝网络状态' },
+      { id: 'monitor', label: '设备监控', icon: 'heartbeat', description: 'CPU、内存、存储与系统运行状态' }
     ]
   },
   {
@@ -20,8 +21,7 @@ const groups = [
       { id: 'network', label: '蜂窝连接', icon: 'tower-cell', description: '网络模式、SIM 卡、数据连接和漫游' },
       { id: 'netif', label: '网络接口', icon: 'ethernet', description: '查看接口状态、地址和实时速率' },
       { id: 'apn', label: 'APN 配置', icon: 'mobile-alt', description: '管理蜂窝网络接入点配置' },
-      { id: 'advanced', label: '高级网络', icon: 'star', description: '频段、小区扫描与锁定策略' },
-      { id: 'cells', label: '小区扫描', icon: 'satellite-dish', description: '扫描周边小区并锁定目标小区' }
+      { id: 'advanced', label: '高级网络', icon: 'star', description: '频段、小区扫描与锁定策略' }
     ]
   },
   {
@@ -71,6 +71,7 @@ const loginLoading = ref(false)
 const showPassword = ref(false)
 const systemInfo = ref({})
 const currentBand = ref({})
+const modemProfile = ref({})
 const loading = ref(false)
 const lastUpdated = ref('')
 let refreshTimer
@@ -81,7 +82,23 @@ provide('handleLogout', logout)
 provide('isDark', isDark)
 
 const activePage = computed(() => groups.flatMap(group => group.items).find(item => item.id === activeNav.value))
-const signal = computed(() => Number(currentBand.value.rsrp || systemInfo.value.rsrp || systemInfo.value.signal_strength || 0))
+const modemName = computed(() => {
+  const candidates = [
+    systemInfo.value.modem_model,
+    systemInfo.value.module_model,
+    systemInfo.value.model,
+    systemInfo.value.model_name,
+    systemInfo.value.device_model,
+    modemProfile.value.name
+  ]
+  return candidates.find(value => typeof value === 'string' && value.trim())?.trim() || 'Modem'
+})
+const productName = computed(() => /\btools\b/i.test(modemName.value) ? modemName.value : `${modemName.value} Tools`)
+const signal = computed(() => {
+  const raw = currentBand.value.rsrp ?? systemInfo.value.rsrp ?? systemInfo.value.signal_dbm
+  const value = Number(raw)
+  return Number.isFinite(value) && value < 0 ? value : 0
+})
 const signalLevel = computed(() => signal.value >= -80 ? 4 : signal.value >= -90 ? 3 : signal.value >= -105 ? 2 : signal.value ? 1 : 0)
 const networkType = computed(() => currentBand.value.network_type || systemInfo.value.network_type || '未连接')
 
@@ -123,14 +140,16 @@ function value(input, fallback = '--') {
   return input === undefined || input === null || input === '' ? fallback : input
 }
 
-function uptime(seconds) {
-  const total = Number(seconds || 0)
-  if (!total) return '--'
-  const days = Math.floor(total / 86400)
-  const hours = Math.floor((total % 86400) / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  return days ? `${days} 天 ${hours} 小时` : `${hours} 小时 ${minutes} 分钟`
+function percentage(used, total) {
+  const numerator = Number(used || 0)
+  const denominator = Number(total || 0)
+  return denominator > 0 ? Math.max(0, Math.min(100, Math.round(numerator / denominator * 100))) : 0
 }
+
+const memoryUsed = computed(() => Math.max(0, Number(systemInfo.value.total_ram || 0) - Number(systemInfo.value.free_ram || 0) - Number(systemInfo.value.cached_ram || 0)))
+const storageUsed = computed(() => Math.max(0, Number(systemInfo.value.storage_total || 0) - Number(systemInfo.value.storage_free || 0)))
+const memoryUsage = computed(() => percentage(memoryUsed.value, systemInfo.value.total_ram))
+const storageUsage = computed(() => percentage(storageUsed.value, systemInfo.value.storage_total))
 
 function normalizeBand(payload) {
   if (payload?.Data) return payload.Data
@@ -142,15 +161,27 @@ async function refresh() {
   if (!authenticated.value || loading.value) return
   loading.value = true
   try {
-    const [info, band] = await Promise.all([fetchSystemInfo(), getCurrentBand()])
+    const [info, band, profile] = await Promise.all([
+      fetchSystemInfo(),
+      getCurrentBand().catch(() => null),
+      fetchModemProfile().catch(() => modemProfile.value)
+    ])
     systemInfo.value = info || {}
-    currentBand.value = normalizeBand(band)
+    currentBand.value = band ? normalizeBand(band) : {}
+    modemProfile.value = profile || {}
     lastUpdated.value = new Date().toLocaleTimeString()
   } catch (error) {
     console.warn('Dashboard refresh failed:', error.message)
   } finally {
     loading.value = false
   }
+}
+
+async function fetchModemProfile() {
+  const response = await authFetch('/api/modem-profile')
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const payload = await response.json()
+  return normalizeBand(payload)
 }
 
 async function checkAuth() {
@@ -186,8 +217,12 @@ async function login() {
   }
 }
 
-function logout() {
-  clearAuthToken()
+async function logout() {
+  try {
+    await authLogout()
+  } catch {
+    clearAuthToken()
+  }
   authenticated.value = false
   password.value = ''
   if (refreshTimer) {
@@ -208,6 +243,10 @@ onMounted(() => {
   checkAuth()
 })
 
+watch(productName, value => {
+  document.title = `${value} - 设备控制台`
+}, { immediate: true })
+
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   window.removeEventListener('auth-required', onAuthRequired)
@@ -223,7 +262,7 @@ onUnmounted(() => {
   <div v-else-if="!authenticated" class="login-screen">
     <form class="login-panel" @submit.prevent="login">
       <div class="login-mark"><font-awesome-icon icon="tower-broadcast" /></div>
-      <div class="eyebrow">UDX710 TOOLS</div>
+      <div class="eyebrow">{{ productName }}</div>
       <h1>登录设备控制台</h1>
       <p>输入管理员密码以继续管理设备。</p>
       <label>
@@ -246,7 +285,7 @@ onUnmounted(() => {
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="brand">
         <div class="brand-mark"><font-awesome-icon icon="tower-broadcast" /></div>
-        <div><strong>UDX710 Tools</strong><span>设备控制台</span></div>
+        <div><strong>{{ productName }}</strong><span>设备控制台</span></div>
       </div>
       <nav class="sidebar-nav">
         <div v-for="group in groups" :key="group.label" class="nav-group">
@@ -289,7 +328,7 @@ onUnmounted(() => {
       <main class="page-content">
         <template v-if="activeNav === 'overview'">
           <div class="page-heading">
-            <div><div class="eyebrow">实时状态</div><h2>设备概览</h2><p>查看蜂窝连接和设备资源的当前状态。</p></div>
+            <div><div class="eyebrow">实时状态</div><h2>设备概览</h2><p>快速查看连接状态、设备资源和运行摘要。</p></div>
             <button class="secondary-button" @click="refresh"><font-awesome-icon icon="sync-alt" />刷新状态</button>
           </div>
           <section class="overview-hero">
@@ -297,14 +336,15 @@ onUnmounted(() => {
             <div class="hero-signal"><div class="signal-bars"><i v-for="level in 4" :key="level" :class="{ on: level <= signalLevel }"></i></div><div><strong>{{ signal ? `${signal} dBm` : '暂无信号' }}</strong><small>RSRP 信号强度</small></div></div>
           </section>
           <section class="metric-grid">
-            <div class="metric"><div class="metric-label"><font-awesome-icon icon="microchip" /> CPU 使用率</div><strong>{{ value(systemInfo.cpu_usage, '0') }}<small>%</small></strong><div class="meter"><span :style="{ width: `${Math.min(Number(systemInfo.cpu_usage || 0), 100)}%` }"></span></div></div>
-            <div class="metric"><div class="metric-label"><font-awesome-icon icon="memory" /> 内存使用率</div><strong>{{ value(systemInfo.memory_usage, '0') }}<small>%</small></strong><div class="meter blue"><span :style="{ width: `${Math.min(Number(systemInfo.memory_usage || 0), 100)}%` }"></span></div></div>
-            <div class="metric"><div class="metric-label"><font-awesome-icon icon="temperature-half" /> 设备温度</div><strong>{{ value(systemInfo.thermal_temp || systemInfo.temperature) }}<small>°C</small></strong><span class="metric-note">运行正常</span></div>
-            <div class="metric"><div class="metric-label"><font-awesome-icon icon="clock" /> 运行时间</div><strong>{{ uptime(systemInfo.uptime) }}</strong><span class="metric-note">自上次启动</span></div>
+            <div class="metric"><div class="metric-label"><font-awesome-icon icon="microchip" /> CPU 使用率</div><strong>{{ percentage(systemInfo.cpu_usage, 100) }}<small>%</small></strong><div class="meter"><span :style="{ width: `${percentage(systemInfo.cpu_usage, 100)}%` }"></span></div></div>
+            <div class="metric"><div class="metric-label"><font-awesome-icon icon="memory" /> 内存使用率</div><strong>{{ memoryUsage }}<small>%</small></strong><div class="meter blue"><span :style="{ width: `${memoryUsage}%` }"></span></div></div>
+            <div class="metric"><div class="metric-label"><font-awesome-icon icon="hard-drive" /> 存储使用率</div><strong>{{ storageUsage }}<small>%</small></strong><div class="meter"><span :style="{ width: `${storageUsage}%` }"></span></div></div>
+            <div class="metric"><div class="metric-label"><font-awesome-icon icon="temperature-half" /> 设备温度</div><strong>{{ value(systemInfo.thermal_temp ?? systemInfo.temperature) }}<small>°C</small></strong><span class="metric-note">{{ systemInfo.uptime ? '设备运行中' : '等待状态数据' }}</span></div>
           </section>
           <div class="content-columns">
-            <section class="panel"><div class="panel-header"><div><h3>网络详情</h3><p>当前蜂窝连接参数</p></div><button class="text-button" @click="selectNav('network')">管理连接 <font-awesome-icon icon="arrow-right" /></button></div><div class="detail-list"><div><span>网络制式</span><strong>{{ networkType }}</strong></div><div><span>频段</span><strong>{{ value(currentBand.band) }}</strong></div><div><span>频点 ARFCN</span><strong>{{ value(currentBand.arfcn) }}</strong></div><div><span>小区 PCI</span><strong>{{ value(currentBand.pci) }}</strong></div><div><span>RSRQ</span><strong>{{ currentBand.rsrq ? `${currentBand.rsrq} dB` : '--' }}</strong></div><div><span>SINR</span><strong>{{ currentBand.sinr ? `${currentBand.sinr} dB` : '--' }}</strong></div></div></section>
-            <section class="panel"><div class="panel-header"><div><h3>快捷操作</h3><p>常用设备控制入口</p></div></div><div class="quick-actions"><button @click="selectNav('advanced')"><span class="action-icon green"><font-awesome-icon icon="tower-cell" /></span><span><strong>高级网络</strong><small>频段、小区和网络策略</small></span><font-awesome-icon icon="arrow-right" /></button><button @click="selectNav('sms')"><span class="action-icon blue"><font-awesome-icon icon="envelope" /></span><span><strong>短信管理</strong><small>收发短信和转发规则</small></span><font-awesome-icon icon="arrow-right" /></button><button @click="selectNav('settings')"><span class="action-icon orange"><font-awesome-icon icon="sliders" /></span><span><strong>系统设置</strong><small>设备与模组适配配置</small></span><font-awesome-icon icon="arrow-right" /></button></div></section>
+            <section class="panel"><div class="panel-header"><div><h3>连接摘要</h3><p>当前蜂窝网络和模组状态</p></div><button class="text-button" @click="selectNav('modem')">模组监控 <font-awesome-icon icon="arrow-right" /></button></div><div class="detail-list"><div><span>模组型号</span><strong>{{ value(systemInfo.modem_model) }}</strong></div><div><span>SIM 卡槽</span><strong>{{ value(systemInfo.sim_slot) }}</strong></div><div><span>网络制式</span><strong>{{ networkType }}</strong></div><div><span>频段</span><strong>{{ value(currentBand.band || systemInfo.network_band) }}</strong></div><div><span>信号质量</span><strong>{{ currentBand.sinr ? `${currentBand.sinr} dB` : '--' }}</strong></div><div><span>IP 地址</span><strong>{{ value(systemInfo.ip) }}</strong></div></div></section>
+            <section class="panel"><div class="panel-header"><div><h3>设备摘要</h3><p>系统资源和运行信息</p></div><button class="text-button" @click="selectNav('monitor')">设备监控 <font-awesome-icon icon="arrow-right" /></button></div><div class="detail-list"><div><span>主机名</span><strong>{{ value(systemInfo.hostname) }}</strong></div><div><span>运行时间</span><strong>{{ systemInfo.uptime ? `${Math.floor(systemInfo.uptime / 86400)} 天 ${Math.floor(systemInfo.uptime % 86400 / 3600)} 小时` : '--' }}</strong></div><div><span>空闲内存</span><strong>{{ systemInfo.free_ram ?? '--' }} MB</strong></div><div><span>可用存储</span><strong>{{ systemInfo.storage_free ?? '--' }} MB</strong></div><div><span>系统版本</span><strong>{{ value(systemInfo.release) }}</strong></div><div><span>设备温度</span><strong>{{ value(systemInfo.thermal_temp ?? systemInfo.temperature) }} °C</strong></div></div></section>
+            <section class="panel overview-actions"><div class="panel-header"><div><h3>快捷操作</h3><p>常用设备控制入口</p></div></div><div class="quick-actions"><button @click="selectNav('advanced')"><span class="action-icon green"><font-awesome-icon icon="tower-cell" /></span><span><strong>高级网络</strong><small>频段、小区和网络策略</small></span><font-awesome-icon icon="arrow-right" /></button><button @click="selectNav('sms')"><span class="action-icon blue"><font-awesome-icon icon="envelope" /></span><span><strong>短信管理</strong><small>收发短信和转发规则</small></span><font-awesome-icon icon="arrow-right" /></button><button @click="selectNav('settings')"><span class="action-icon orange"><font-awesome-icon icon="sliders" /></span><span><strong>系统设置</strong><small>设备与模组适配配置</small></span><font-awesome-icon icon="arrow-right" /></button></div></section>
           </div>
         </template>
 

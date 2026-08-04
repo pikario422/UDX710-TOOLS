@@ -20,17 +20,17 @@ typedef struct {
     unsigned long total_ram;      /* MB */
     unsigned long free_ram;       /* MB */
     unsigned long cached_ram;     /* MB */
+    unsigned long storage_total;  /* MB */
+    unsigned long storage_free;   /* MB */
     double cpu_usage;             /* % */
     double uptime;                /* seconds */
     char bridge_status[32];
     char sim_slot[16];
     char signal_strength[64];
+    int signal_percent;
+    int signal_dbm;
     double thermal_temp;          /* Celsius */
-    char power_status[32];
-    char battery_health[32];
-    unsigned int battery_capacity;
-    char ssid[64];
-    char passwd[64];
+    char ip[46];
     char select_network_mode[32];
     int is_activated;
     char serial[32];
@@ -39,6 +39,9 @@ typedef struct {
     char imei[20];
     char iccid[24];
     char imsi[20];
+    char modem_manufacturer[64];
+    char modem_model[64];
+    char modem_revision[64];
     char carrier[32];
     char network_type[16];
     char network_band[16];
@@ -53,6 +56,9 @@ typedef struct {
  * @return 0 成功, -1 失败
  */
 int get_system_info(SystemInfo *info);
+
+/* Clear cached SIM and modem identity data after a profile update. */
+void sysinfo_invalidate_identity_cache(void);
 
 /**
  * @brief 获取系统运行时间

@@ -39,17 +39,17 @@ void handle_info(struct mg_connection *c, struct mg_http_message *hm) {
   json_add_ulong(j, "total_ram", info.total_ram);
   json_add_ulong(j, "free_ram", info.free_ram);
   json_add_ulong(j, "cached_ram", info.cached_ram);
+  json_add_ulong(j, "storage_total", info.storage_total);
+  json_add_ulong(j, "storage_free", info.storage_free);
   json_add_double(j, "cpu_usage", info.cpu_usage);
   json_add_double(j, "uptime", info.uptime);
   json_add_str(j, "bridge_status", info.bridge_status);
   json_add_str(j, "sim_slot", info.sim_slot);
   json_add_str(j, "signal_strength", info.signal_strength);
+  json_add_int(j, "signal_percent", info.signal_percent);
+  json_add_int(j, "signal_dbm", info.signal_dbm);
   json_add_double(j, "thermal_temp", info.thermal_temp);
-  json_add_str(j, "power_status", info.power_status);
-  json_add_str(j, "battery_health", info.battery_health);
-  json_add_int(j, "battery_capacity", info.battery_capacity);
-  json_add_str(j, "ssid", info.ssid);
-  json_add_str(j, "passwd", info.passwd);
+  json_add_str(j, "ip", info.ip);
   json_add_str(j, "select_network_mode", info.select_network_mode);
   json_add_int(j, "is_activated", info.is_activated);
   json_add_str(j, "serial", info.serial);
@@ -58,6 +58,9 @@ void handle_info(struct mg_connection *c, struct mg_http_message *hm) {
   json_add_str(j, "imei", info.imei);
   json_add_str(j, "iccid", info.iccid);
   json_add_str(j, "imsi", info.imsi);
+  json_add_str(j, "modem_manufacturer", info.modem_manufacturer);
+  json_add_str(j, "modem_model", info.modem_model);
+  json_add_str(j, "modem_revision", info.modem_revision);
   json_add_str(j, "carrier", info.carrier);
   json_add_str(j, "network_type", info.network_type);
   json_add_str(j, "network_band", info.network_band);
@@ -185,6 +188,7 @@ void handle_switch(struct mg_connection *c, struct mg_http_message *hm) {
   JsonBuilder *j = json_new();
   json_obj_open(j);
   if (switch_slot(slot) == 0) {
+    sysinfo_invalidate_identity_cache();
     json_add_str(j, "status", "success");
     char msg[64];
     snprintf(msg, sizeof(msg), "Slot switched to %s successfully", slot);
@@ -852,6 +856,14 @@ static void add_modem_profile_json(JsonBuilder *j, const ModemProfile *profile) 
   json_add_str(j, "cell_lock_nr", profile->cell_lock_nr);
   json_add_str(j, "imei_query", profile->imei_query);
   json_add_str(j, "imei_set", profile->imei_set);
+  json_add_str(j, "iccid_query", profile->iccid_query);
+  json_add_str(j, "imsi_query", profile->imsi_query);
+  json_add_str(j, "qos_query", profile->qos_query);
+  json_add_str(j, "qos_response_prefix", profile->qos_response_prefix);
+  json_add_int(j, "qos_qci_index", profile->qos_qci_index);
+  json_add_int(j, "qos_downlink_index", profile->qos_downlink_index);
+  json_add_int(j, "qos_uplink_index", profile->qos_uplink_index);
+  json_add_str(j, "airplane_query", profile->airplane_query);
 }
 
 /* GET /api/sms/email - 获取邮件转发配置（密码不会返回给前端） */
@@ -943,6 +955,10 @@ static int modem_profile_command_is_valid(const char *command) {
          strchr(command, '%') == NULL;
 }
 
+static int modem_profile_optional_command_is_valid(const char *command) {
+  return !command || !command[0] || modem_profile_command_is_valid(command);
+}
+
 static int modem_profile_template_is_valid(const char *command,
                                            char placeholder,
                                            int expected_count) {
@@ -1000,6 +1016,16 @@ static int modem_profile_is_valid(const ModemProfile *profile) {
   for (i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
     if (!modem_profile_command_is_valid(commands[i])) return 0;
   }
+  if (!modem_profile_optional_command_is_valid(profile->iccid_query) ||
+      !modem_profile_optional_command_is_valid(profile->imsi_query) ||
+      !modem_profile_optional_command_is_valid(profile->qos_query) ||
+      !modem_profile_optional_command_is_valid(profile->airplane_query) ||
+      strchr(profile->qos_response_prefix, '\r') ||
+      strchr(profile->qos_response_prefix, '\n') ||
+      strchr(profile->qos_response_prefix, '%') ||
+      profile->qos_qci_index < 0 || profile->qos_qci_index > 31 ||
+      profile->qos_downlink_index < 0 || profile->qos_downlink_index > 31 ||
+      profile->qos_uplink_index < 0 || profile->qos_uplink_index > 31) return 0;
   if (strcmp(profile->advanced_strategy, "bitmask_matrix") == 0) {
     return modem_profile_template_is_valid(profile->band_set_lte, 'd', 2) &&
            modem_profile_template_is_valid(profile->band_set_nr, 'd', 2) &&
@@ -1066,6 +1092,11 @@ void handle_modem_profile_save(struct mg_connection *c,
   mg_json_get_str_to_buf(hm->body, "$.cell_lock_nr", profile.cell_lock_nr, sizeof(profile.cell_lock_nr));
   mg_json_get_str_to_buf(hm->body, "$.imei_query", profile.imei_query, sizeof(profile.imei_query));
   mg_json_get_str_to_buf(hm->body, "$.imei_set", profile.imei_set, sizeof(profile.imei_set));
+  mg_json_get_str_to_buf(hm->body, "$.iccid_query", profile.iccid_query, sizeof(profile.iccid_query));
+  mg_json_get_str_to_buf(hm->body, "$.imsi_query", profile.imsi_query, sizeof(profile.imsi_query));
+  mg_json_get_str_to_buf(hm->body, "$.qos_query", profile.qos_query, sizeof(profile.qos_query));
+  mg_json_get_str_to_buf(hm->body, "$.qos_response_prefix", profile.qos_response_prefix, sizeof(profile.qos_response_prefix));
+  mg_json_get_str_to_buf(hm->body, "$.airplane_query", profile.airplane_query, sizeof(profile.airplane_query));
   if (mg_json_get_bool(hm->body, "$.advanced_network_enabled", &enabled)) {
     profile.advanced_network_enabled = enabled ? 1 : 0;
   }
@@ -1079,6 +1110,9 @@ void handle_modem_profile_save(struct mg_connection *c,
   profile.cell_sinr_column = (int) mg_json_get_long(hm->body, "$.cell_sinr_column", profile.cell_sinr_column);
   profile.cell_rsrp_column = (int) mg_json_get_long(hm->body, "$.cell_rsrp_column", profile.cell_rsrp_column);
   profile.cell_rsrq_column = (int) mg_json_get_long(hm->body, "$.cell_rsrq_column", profile.cell_rsrq_column);
+  profile.qos_qci_index = (int) mg_json_get_long(hm->body, "$.qos_qci_index", profile.qos_qci_index);
+  profile.qos_downlink_index = (int) mg_json_get_long(hm->body, "$.qos_downlink_index", profile.qos_downlink_index);
+  profile.qos_uplink_index = (int) mg_json_get_long(hm->body, "$.qos_uplink_index", profile.qos_uplink_index);
 
   if (!modem_profile_is_valid(&profile)) {
     HTTP_ERROR(c, 400, "Invalid module profile");
@@ -1088,6 +1122,7 @@ void handle_modem_profile_save(struct mg_connection *c,
     HTTP_ERROR(c, 500, "Failed to save module profile");
     return;
   }
+  sysinfo_invalidate_identity_cache();
 
   JsonBuilder *j = json_new();
   json_obj_open(j);
@@ -1105,6 +1140,7 @@ void handle_modem_profile_reset(struct mg_connection *c,
     HTTP_ERROR(c, 500, "Failed to restore module profile");
     return;
   }
+  sysinfo_invalidate_identity_cache();
   modem_profile_get(&profile);
   JsonBuilder *j = json_new();
   json_obj_open(j);

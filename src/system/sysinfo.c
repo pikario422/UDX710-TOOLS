@@ -7,13 +7,35 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <sys/statvfs.h>
 #include <sys/utsname.h>
 #include <glib.h>
 #include "sysinfo.h"
 #include "dbus_core.h"
-#include "exec_utils.h"
 #include "ofono.h"
 #include "modem_profile.h"
+
+#define SYSINFO_DBUS_TIMEOUT_MS 2000
+#define IDENTITY_CACHE_TTL_US (5 * G_USEC_PER_SEC * 60)
+
+typedef struct {
+    char ril_path[64] = "unknown";
+    char imei[20];
+    char iccid[24];
+    char imsi[20];
+    char carrier[32];
+    char manufacturer[64];
+    char model[64];
+    char revision[64];
+    gint64 refreshed_at;
+} ModemIdentityCache;
+
+static GMutex g_identity_cache_lock;
+static ModemIdentityCache g_identity_cache;
 
 /* 读取文件内容 */
 static int read_file(const char *path, char *buf, size_t size) {
@@ -37,6 +59,8 @@ static void parse_meminfo(SystemInfo *info) {
             info->total_ram = val / 1024;
         } else if (sscanf(line, "MemFree: %lu kB", &val) == 1) {
             info->free_ram = val / 1024;
+        } else if (sscanf(line, "MemAvailable: %lu kB", &val) == 1) {
+            info->free_ram = val / 1024;
         } else if (sscanf(line, "Cached: %lu kB", &val) == 1) {
             info->cached_ram = val / 1024;
         }
@@ -44,11 +68,61 @@ static void parse_meminfo(SystemInfo *info) {
     }
 }
 
+/* Read root filesystem capacity in MB. */
+static void parse_storage_info(SystemInfo *info) {
+    struct statvfs fs;
+    unsigned long long block_size;
+
+    if (statvfs("/", &fs) != 0) return;
+
+    block_size = fs.f_frsize ? fs.f_frsize : fs.f_bsize;
+    info->storage_total = (unsigned long) ((block_size * fs.f_blocks) / (1024 * 1024));
+    info->storage_free = (unsigned long) ((block_size * fs.f_bavail) / (1024 * 1024));
+}
+
 double get_uptime(void) {
     char buf[64];
     if (read_file("/proc/uptime", buf, sizeof(buf)) != 0) return -1;
     double uptime;
     if (sscanf(buf, "%lf", &uptime) == 1) return uptime;
+    return -1;
+}
+
+static int get_default_ipv4(char *ip, size_t size) {
+    FILE *route;
+    char line[256];
+    char interface[IFNAMSIZ] = {0};
+    struct ifaddrs *addresses = NULL;
+    struct ifaddrs *address;
+
+    if (!ip || size == 0) return -1;
+    ip[0] = '\0';
+    route = fopen("/proc/net/route", "r");
+    if (!route) return -1;
+
+    while (fgets(line, sizeof(line), route)) {
+        unsigned long destination;
+        unsigned int flags;
+        if (sscanf(line, "%15s %lx %*lx %x", interface, &destination,
+                   &flags) == 3 && destination == 0 && (flags & 0x1)) {
+            break;
+        }
+        interface[0] = '\0';
+    }
+    fclose(route);
+    if (!interface[0] || getifaddrs(&addresses) != 0) return -1;
+
+    for (address = addresses; address; address = address->ifa_next) {
+        if (!address->ifa_addr || address->ifa_addr->sa_family != AF_INET ||
+            strcmp(address->ifa_name, interface) != 0) continue;
+        if (inet_ntop(AF_INET,
+                      &((struct sockaddr_in *)address->ifa_addr)->sin_addr,
+                      ip, size)) {
+            freeifaddrs(addresses);
+            return 0;
+        }
+    }
+    freeifaddrs(addresses);
     return -1;
 }
 
@@ -102,13 +176,12 @@ int get_current_slot(char *slot, char *ril_path) {
     return 0;
 }
 
-int get_signal_strength(char *strength, size_t size) {
-    char slot[16], ril_path[64];
+static int get_signal_strength_for_path(const char *ril_path, char *strength,
+                                        size_t size, int *percent, int *dbm) {
     int strength_val = 0, dbm_val = 0;
 
     strcpy(strength, "N/A");
-
-    if (get_current_slot(slot, ril_path) != 0 || strcmp(ril_path, "unknown") == 0) {
+    if (!ril_path || strcmp(ril_path, "unknown") == 0) {
         return -1;
     }
 
@@ -117,21 +190,44 @@ int get_signal_strength(char *strength, size_t size) {
         return -1;
     }
 
-    /* 格式化输出: "XX%, -YY dBm" */
-    snprintf(strength, size, "%d%%, -%d dBm", strength_val, dbm_val);
+    if (dbm_val > 0) dbm_val = -dbm_val;
+    snprintf(strength, size, "%d%%, %d dBm", strength_val, dbm_val);
+    if (percent) *percent = strength_val;
+    if (dbm) *dbm = dbm_val;
     return 0;
 }
 
-double get_thermal_temp(void) {
-    char output[64];
-    if (run_command(output, sizeof(output), "sh", "-c",
-        "cat /sys/class/thermal/thermal_zone*/temp | awk '{sum+=$1} END {printf \"%.2f\", sum/NR/1000}'",
-        NULL) != 0) {
+int get_signal_strength(char *strength, size_t size) {
+    char slot[16], ril_path[64];
+
+    if (get_current_slot(slot, ril_path) != 0) {
+        strcpy(strength, "N/A");
         return -1;
     }
-    double temp;
-    if (sscanf(output, "%lf", &temp) == 1) return temp;
-    return -1;
+    return get_signal_strength_for_path(ril_path, strength, size, NULL, NULL);
+}
+
+double get_thermal_temp(void) {
+    DIR *dir;
+    struct dirent *entry;
+    double total = 0;
+    int count = 0;
+
+    dir = opendir("/sys/class/thermal");
+    if (!dir) return -1;
+    while ((entry = readdir(dir)) != NULL) {
+        char path[256], output[64];
+        long value;
+        if (strncmp(entry->d_name, "thermal_zone", 12) != 0) continue;
+        snprintf(path, sizeof(path), "/sys/class/thermal/%s/temp", entry->d_name);
+        if (read_file(path, output, sizeof(output)) == 0 &&
+            sscanf(output, "%ld", &value) == 1) {
+            total += value / 1000.0;
+            count++;
+        }
+    }
+    closedir(dir);
+    return count ? total / count : -1;
 }
 
 
@@ -142,9 +238,65 @@ extern int get_imsi(char *imsi, size_t size);
 extern const char *get_carrier_from_imsi(const char *imsi);
 extern int get_airplane_mode(void);
 
+void sysinfo_invalidate_identity_cache(void) {
+    g_mutex_lock(&g_identity_cache_lock);
+    memset(&g_identity_cache, 0, sizeof(g_identity_cache));
+    g_mutex_unlock(&g_identity_cache_lock);
+}
+
+static void copy_identity_to_info(const ModemIdentityCache *identity,
+                                  SystemInfo *info) {
+    strncpy(info->imei, identity->imei, sizeof(info->imei) - 1);
+    strncpy(info->iccid, identity->iccid, sizeof(info->iccid) - 1);
+    strncpy(info->imsi, identity->imsi, sizeof(info->imsi) - 1);
+    strncpy(info->carrier, identity->carrier, sizeof(info->carrier) - 1);
+    strncpy(info->modem_manufacturer, identity->manufacturer,
+            sizeof(info->modem_manufacturer) - 1);
+    strncpy(info->modem_model, identity->model,
+            sizeof(info->modem_model) - 1);
+    strncpy(info->modem_revision, identity->revision,
+            sizeof(info->modem_revision) - 1);
+}
+
+static void populate_modem_identity(SystemInfo *info, const char *ril_path) {
+    ModemIdentityCache identity = {0};
+    gint64 now = g_get_monotonic_time();
+
+    g_mutex_lock(&g_identity_cache_lock);
+    if (ril_path && strcmp(ril_path, g_identity_cache.ril_path) == 0 &&
+        g_identity_cache.refreshed_at > 0 &&
+        now - g_identity_cache.refreshed_at < IDENTITY_CACHE_TTL_US) {
+        copy_identity_to_info(&g_identity_cache, info);
+        g_mutex_unlock(&g_identity_cache_lock);
+        return;
+    }
+    g_mutex_unlock(&g_identity_cache_lock);
+
+    if (ril_path) strncpy(identity.ril_path, ril_path, sizeof(identity.ril_path) - 1);
+    get_imei(identity.imei, sizeof(identity.imei));
+    get_iccid(identity.iccid, sizeof(identity.iccid));
+    if (get_imsi(identity.imsi, sizeof(identity.imsi)) == 0) {
+        const char *carrier = get_carrier_from_imsi(identity.imsi);
+        if (carrier) strncpy(identity.carrier, carrier, sizeof(identity.carrier) - 1);
+    }
+
+    OfonoModemDetails details;
+    if (ofono_get_modem_details(ril_path, &details, SYSINFO_DBUS_TIMEOUT_MS) == 0) {
+        strncpy(identity.manufacturer, details.manufacturer,
+                sizeof(identity.manufacturer) - 1);
+        strncpy(identity.model, details.model, sizeof(identity.model) - 1);
+        strncpy(identity.revision, details.revision, sizeof(identity.revision) - 1);
+    }
+    identity.refreshed_at = now;
+
+    g_mutex_lock(&g_identity_cache_lock);
+    g_identity_cache = identity;
+    copy_identity_to_info(&g_identity_cache, info);
+    g_mutex_unlock(&g_identity_cache_lock);
+}
+
 int get_system_info(SystemInfo *info) {
     struct utsname uts;
-    char buf[256];
 
     /* 初始化默认值 */
     memset(info, 0, sizeof(SystemInfo));
@@ -156,10 +308,6 @@ int get_system_info(SystemInfo *info) {
     strcpy(info->bridge_status, "N/A");
     strcpy(info->sim_slot, "N/A");
     strcpy(info->signal_strength, "N/A");
-    strcpy(info->power_status, "N/A");
-    strcpy(info->battery_health, "N/A");
-    strcpy(info->ssid, "N/A");
-    strcpy(info->passwd, "N/A");
     strcpy(info->select_network_mode, "N/A");
     strcpy(info->network_mode, "N/A");
     strcpy(info->network_type, "N/A");
@@ -178,6 +326,9 @@ int get_system_info(SystemInfo *info) {
     /* 内存信息 */
     parse_meminfo(info);
 
+    /* 根文件系统存储空间 */
+    parse_storage_info(info);
+
     /* 运行时间 */
     info->uptime = get_uptime();
 
@@ -191,54 +342,33 @@ int get_system_info(SystemInfo *info) {
     }
 
     /* 信号强度 */
-    get_signal_strength(info->signal_strength, sizeof(info->signal_strength));
+    get_signal_strength_for_path(ril_path, info->signal_strength,
+                                 sizeof(info->signal_strength),
+                                 &info->signal_percent, &info->signal_dbm);
+
+    /* 默认路由的 IPv4 地址 */
+    get_default_ipv4(info->ip, sizeof(info->ip));
 
     /* 温度 */
     info->thermal_temp = get_thermal_temp();
 
-    /* 电源状态 */
-    if (read_file("/sys/class/power_supply/battery/status", buf, sizeof(buf)) == 0) {
-        buf[strcspn(buf, "\n")] = '\0';
-        strncpy(info->power_status, buf, sizeof(info->power_status) - 1);
-    }
+    /* SIM identity and modem details are stable between SIM switches. */
+    populate_modem_identity(info, ril_path);
 
-    /* 电池健康 */
-    if (read_file("/sys/class/power_supply/battery/health", buf, sizeof(buf)) == 0) {
-        buf[strcspn(buf, "\n")] = '\0';
-        strncpy(info->battery_health, buf, sizeof(info->battery_health) - 1);
-    }
-
-    /* 电池容量 */
-    if (read_file("/sys/class/power_supply/battery/capacity", buf, sizeof(buf)) == 0) {
-        info->battery_capacity = atoi(buf);
-    }
-
-    /* IMEI */
-    get_imei(info->imei, sizeof(info->imei));
-
-    /* ICCID */
-    get_iccid(info->iccid, sizeof(info->iccid));
-
-    /* IMSI 和运营商 */
-    if (get_imsi(info->imsi, sizeof(info->imsi)) == 0) {
-        const char *carrier = get_carrier_from_imsi(info->imsi);
-        strncpy(info->carrier, carrier, sizeof(info->carrier) - 1);
+    char registered_name[32] = {0};
+    char registered_technology[32] = {0};
+    if (ofono_get_network_registration(ril_path, registered_name,
+                                       sizeof(registered_name),
+                                       registered_technology,
+                                        sizeof(registered_technology),
+                                        SYSINFO_DBUS_TIMEOUT_MS) == 0 &&
+        registered_name[0] != '\0') {
+        strncpy(info->carrier, registered_name, sizeof(info->carrier) - 1);
     }
 
     /* 飞行模式 */
     int airplane = get_airplane_mode();
     info->airplane_mode = (airplane == 1) ? 1 : 0;
-
-    /* WiFi 信息 */
-    if (read_file("/var/lib/connman/settings", buf, sizeof(buf)) == 0) {
-        char *p = strstr(buf, "Tethering.Identifier=");
-        if (p) {
-            p += strlen("Tethering.Identifier=");
-            char *end = strchr(p, '\n');
-            if (end) *end = '\0';
-            strncpy(info->ssid, p, sizeof(info->ssid) - 1);
-        }
-    }
 
     /* 网络模式选择 - 使用 ofono D-Bus 接口 */
     char mode_buf[64] = {0};
@@ -251,6 +381,10 @@ int get_system_info(SystemInfo *info) {
     /* 网络类型和频段 */
     get_network_type_and_band(info->network_type, sizeof(info->network_type),
                               info->network_band, sizeof(info->network_band));
+    if (strcmp(info->network_type, "N/A") == 0 && registered_technology[0] != '\0') {
+        strncpy(info->network_type, registered_technology,
+                sizeof(info->network_type) - 1);
+    }
 
     /* QoS 签约速率 */
     get_qos_info(&info->qci, &info->downlink_rate, &info->uplink_rate);
@@ -262,44 +396,51 @@ int get_system_info(SystemInfo *info) {
 }
 
 
-/* 获取 QoS 签约速率 */
-/* AT+CGEQOSRDP 返回: +CGEQOSRDP: 1,8,0,0,0,0,500000,60000 */
-/* 索引1=QCI, 索引6=下行速率(kbps), 索引7=上行速率(kbps) */
 int get_qos_info(int *qci, int *downlink, int *uplink) {
-    extern int execute_at(const char *command, char **result);
+    ModemProfile profile;
     char *result = NULL;
-    
+    char *p;
+    int values[32] = {0};
+    int count = 0;
+    int max_index;
+
+    if (!qci || !downlink || !uplink) return -1;
     *qci = 0;
     *downlink = 0;
     *uplink = 0;
 
-    if (execute_at("AT+CGEQOSRDP", &result) != 0 || !result) {
+    modem_profile_get(&profile);
+    if (!profile.qos_query[0] ||
+        execute_at(profile.qos_query, &result) != 0 || !result) {
         return -1;
     }
 
-    /* 查找 +CGEQOSRDP: */
-    char *p = strstr(result, "+CGEQOSRDP:");
+    p = profile.qos_response_prefix[0]
+            ? strstr(result, profile.qos_response_prefix)
+            : result;
     if (!p) {
         g_free(result);
         return -1;
     }
 
-    p += strlen("+CGEQOSRDP:");
-    
-    /* 解析逗号分隔的值: 1,8,0,0,0,0,500000,60000 */
-    int values[8] = {0};
-    int count = 0;
+    if (profile.qos_response_prefix[0]) p += strlen(profile.qos_response_prefix);
     char *token = strtok(p, ",\n\r");
-    while (token && count < 8) {
+    while (token && count < (int)(sizeof(values) / sizeof(values[0]))) {
         values[count++] = atoi(token);
         token = strtok(NULL, ",\n\r");
     }
 
-    if (count >= 8) {
-        *qci = values[1];
-        *downlink = values[6];
-        *uplink = values[7];
+    max_index = profile.qos_qci_index;
+    if (profile.qos_downlink_index > max_index) max_index = profile.qos_downlink_index;
+    if (profile.qos_uplink_index > max_index) max_index = profile.qos_uplink_index;
+    if (max_index >= count) {
+        g_free(result);
+        return -1;
     }
+
+    *qci = values[profile.qos_qci_index];
+    *downlink = values[profile.qos_downlink_index];
+    *uplink = values[profile.qos_uplink_index];
 
     g_free(result);
     return 0;

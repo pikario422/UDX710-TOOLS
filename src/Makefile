@@ -24,7 +24,7 @@ MAIN_SRCS = main.c mongoose.c packed_fs.c
 HANDLER_SRCS = handlers/http_server.c handlers/handlers.c
 SYSTEM_SRCS = system/sysinfo.c system/modem.c system/airplane.c system/ofono.c \
               system/exec_utils.c system/advanced.c \
-              system/traffic.c system/reboot.c system/charge.c system/sms.c system/update.c \
+              system/traffic.c system/reboot.c system/sms.c system/update.c \
               system/usb_mode.c system/plugin.c system/plugin_storage.c \
               system/sha256.c system/auth.c system/database.c system/modem_profile.c system/sms_email.c system/apn.c system/json_builder.c \
               system/netif.c system/rathole.c system/phone_case.c system/ipv6_proxy.c system/security.c
@@ -34,7 +34,7 @@ OBJS = $(BUILD_DIR)/main.o $(BUILD_DIR)/mongoose.o $(BUILD_DIR)/packed_fs.o \
        $(BUILD_DIR)/sysinfo.o $(BUILD_DIR)/modem.o $(BUILD_DIR)/airplane.o \
        $(BUILD_DIR)/ofono.o $(BUILD_DIR)/exec_utils.o \
        $(BUILD_DIR)/advanced.o $(BUILD_DIR)/traffic.o $(BUILD_DIR)/reboot.o \
-       $(BUILD_DIR)/charge.o $(BUILD_DIR)/sms.o $(BUILD_DIR)/update.o $(BUILD_DIR)/usb_mode.o \
+       $(BUILD_DIR)/sms.o $(BUILD_DIR)/update.o $(BUILD_DIR)/usb_mode.o \
        $(BUILD_DIR)/plugin.o $(BUILD_DIR)/plugin_storage.o \
        $(BUILD_DIR)/sha256.o $(BUILD_DIR)/auth.o $(BUILD_DIR)/database.o $(BUILD_DIR)/modem_profile.o $(BUILD_DIR)/sms_email.o $(BUILD_DIR)/apn.o \
        $(BUILD_DIR)/json_builder.o $(BUILD_DIR)/netif.o $(BUILD_DIR)/rathole.o $(BUILD_DIR)/phone_case.o \
@@ -89,9 +89,6 @@ $(BUILD_DIR)/traffic.o: system/traffic.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 $(BUILD_DIR)/reboot.o: system/reboot.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
-
-$(BUILD_DIR)/charge.o: system/charge.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 $(BUILD_DIR)/sms.o: system/sms.c | $(BUILD_DIR)

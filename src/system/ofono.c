@@ -491,6 +491,135 @@ int ofono_modem_set_online(const char *modem_path, int online, int timeout_ms) {
   return 0;
 }
 
+static void copy_variant_string(GVariant *value, char *buffer, size_t size) {
+  if (!value || !buffer || size == 0 ||
+      !g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+    return;
+  }
+
+  g_strlcpy(buffer, g_variant_get_string(value, NULL), size);
+}
+
+int ofono_get_modem_details(const char *modem_path,
+                            OfonoModemDetails *details, int timeout_ms) {
+  GError *error = NULL;
+  GDBusProxy *proxy = NULL;
+  GVariant *result = NULL;
+  int found = 0;
+
+  if (!modem_path || !details || !ensure_connection()) {
+    return -1;
+  }
+  memset(details, 0, sizeof(*details));
+
+  proxy = g_dbus_proxy_new_sync(g_dbus_conn, G_DBUS_PROXY_FLAGS_NONE, NULL,
+                                OFONO_SERVICE, modem_path, OFONO_MODEM_IFACE,
+                                NULL, &error);
+  if (!proxy) {
+    if (error) g_error_free(error);
+    return -1;
+  }
+
+  result = g_dbus_proxy_call_sync(proxy, "GetProperties", NULL,
+                                  G_DBUS_CALL_FLAGS_NONE, timeout_ms, NULL,
+                                  &error);
+  if (!result) {
+    if (error) g_error_free(error);
+    g_object_unref(proxy);
+    return -1;
+  }
+
+  GVariant *props = g_variant_get_child_value(result, 0);
+  if (!props) {
+    g_variant_unref(result);
+    g_object_unref(proxy);
+    return -1;
+  }
+  GVariantIter iter;
+  const gchar *key;
+  GVariant *value;
+  g_variant_iter_init(&iter, props);
+  while (g_variant_iter_next(&iter, "{&sv}", &key, &value)) {
+    if (g_strcmp0(key, "Manufacturer") == 0) {
+      copy_variant_string(value, details->manufacturer,
+                          sizeof(details->manufacturer));
+      found |= details->manufacturer[0] != '\0';
+    } else if (g_strcmp0(key, "Model") == 0) {
+      copy_variant_string(value, details->model, sizeof(details->model));
+      found |= details->model[0] != '\0';
+    } else if (g_strcmp0(key, "Revision") == 0) {
+      copy_variant_string(value, details->revision,
+                          sizeof(details->revision));
+      found |= details->revision[0] != '\0';
+    }
+    g_variant_unref(value);
+  }
+
+  g_variant_unref(props);
+  g_variant_unref(result);
+  g_object_unref(proxy);
+  return found ? 0 : -1;
+}
+
+int ofono_get_network_registration(const char *modem_path, char *name,
+                                   size_t name_size, char *technology,
+                                   size_t technology_size, int timeout_ms) {
+  GError *error = NULL;
+  GDBusProxy *proxy = NULL;
+  GVariant *result = NULL;
+  int found = 0;
+
+  if (!modem_path || !name || !technology || name_size == 0 ||
+      technology_size == 0 || !ensure_connection()) {
+    return -1;
+  }
+  name[0] = '\0';
+  technology[0] = '\0';
+
+  proxy = g_dbus_proxy_new_sync(
+      g_dbus_conn, G_DBUS_PROXY_FLAGS_NONE, NULL, OFONO_SERVICE, modem_path,
+      "org.ofono.NetworkRegistration", NULL, &error);
+  if (!proxy) {
+    if (error) g_error_free(error);
+    return -1;
+  }
+
+  result = g_dbus_proxy_call_sync(proxy, "GetProperties", NULL,
+                                  G_DBUS_CALL_FLAGS_NONE, timeout_ms, NULL,
+                                  &error);
+  if (!result) {
+    if (error) g_error_free(error);
+    g_object_unref(proxy);
+    return -1;
+  }
+
+  GVariant *props = g_variant_get_child_value(result, 0);
+  if (!props) {
+    g_variant_unref(result);
+    g_object_unref(proxy);
+    return -1;
+  }
+  GVariantIter iter;
+  const gchar *key;
+  GVariant *value;
+  g_variant_iter_init(&iter, props);
+  while (g_variant_iter_next(&iter, "{&sv}", &key, &value)) {
+    if (g_strcmp0(key, "Name") == 0) {
+      copy_variant_string(value, name, name_size);
+      found |= name[0] != '\0';
+    } else if (g_strcmp0(key, "Technology") == 0) {
+      copy_variant_string(value, technology, technology_size);
+      found |= technology[0] != '\0';
+    }
+    g_variant_unref(value);
+  }
+
+  g_variant_unref(props);
+  g_variant_unref(result);
+  g_object_unref(proxy);
+  return found ? 0 : -1;
+}
+
 int ofono_set_datacard(const char *modem_path) {
   GError *error = NULL;
   GVariant *result = NULL;

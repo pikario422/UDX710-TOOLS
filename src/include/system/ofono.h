@@ -80,6 +80,27 @@ int ofono_get_mode_count(void);
  */
 int ofono_modem_set_online(const char* modem_path, int online, int timeout_ms);
 
+typedef struct {
+  char manufacturer[64];
+  char model[64];
+  char revision[64];
+} OfonoModemDetails;
+
+/**
+ * 获取 oFono 已公开的模组识别信息。
+ * 字段不可用时保留为空，成功获取任一字段时返回 0。
+ */
+int ofono_get_modem_details(const char *modem_path, OfonoModemDetails *details,
+                            int timeout_ms);
+
+/**
+ * 获取注册网络名称和技术制式。
+ * 字段不可用时保留为空，成功获取任一字段时返回 0。
+ */
+int ofono_get_network_registration(const char *modem_path, char *name,
+                                   size_t name_size, char *technology,
+                                   size_t technology_size, int timeout_ms);
+
 /**
  * 设置数据卡
  * @param modem_path modem 路径

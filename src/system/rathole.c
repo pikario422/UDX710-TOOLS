@@ -657,6 +657,77 @@ int rathole_get_logs(char *buf, size_t size, int max_lines) {
   return (int)strlen(buf);
 }
 
+/*
+ * Rathole 自身直接写入日志文件，无法依赖管理 API 的读取频率来控制大小。
+ * 保留尾部日志并原地覆盖，避免 rename 后外部进程继续写入旧 inode。
+ */
+int rathole_maintenance(void) {
+  struct stat st;
+  FILE *source = NULL;
+  FILE *temp = NULL;
+  FILE *target = NULL;
+  char temp_path[128];
+  char buffer[4096];
+  long keep_bytes;
+  size_t count;
+  int result = -1;
+
+  if (stat(RATHOLE_LOG_PATH, &st) != 0 || st.st_size <= RATHOLE_LOG_MAX_BYTES) {
+    return 0;
+  }
+
+  keep_bytes = RATHOLE_LOG_MAX_BYTES / 2;
+  snprintf(temp_path, sizeof(temp_path), "%s.trim.%d", RATHOLE_LOG_PATH,
+           (int)getpid());
+
+  source = fopen(RATHOLE_LOG_PATH, "rb");
+  temp = fopen(temp_path, "wb");
+  if (!source || !temp) {
+    goto cleanup;
+  }
+
+  if (fseek(source, (long)st.st_size - keep_bytes, SEEK_SET) != 0) {
+    goto cleanup;
+  }
+  while ((count = fread(buffer, 1, sizeof(buffer), source)) > 0) {
+    if (fwrite(buffer, 1, count, temp) != count) {
+      goto cleanup;
+    }
+  }
+  if (fclose(source) != 0) {
+    source = NULL;
+    fclose(temp);
+    temp = NULL;
+    goto cleanup;
+  }
+  source = NULL;
+  if (fclose(temp) != 0) {
+    temp = NULL;
+    goto cleanup;
+  }
+  temp = NULL;
+
+  source = fopen(temp_path, "rb");
+  target = fopen(RATHOLE_LOG_PATH, "wb");
+  if (!source || !target) {
+    goto cleanup;
+  }
+  while ((count = fread(buffer, 1, sizeof(buffer), source)) > 0) {
+    if (fwrite(buffer, 1, count, target) != count) {
+      goto cleanup;
+    }
+  }
+  fflush(target);
+  result = 0;
+
+cleanup:
+  if (source) fclose(source);
+  if (temp) fclose(temp);
+  if (target) fclose(target);
+  unlink(temp_path);
+  return result;
+}
+
 int rathole_clear_logs(void) {
   FILE *fp = fopen(RATHOLE_LOG_PATH, "w");
   if (fp) {

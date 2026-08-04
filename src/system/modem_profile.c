@@ -48,7 +48,13 @@ static const ModemProfile g_default_profile = {
     "AT+SPFORCEFRQ=12,2,%s,%s",
     "AT+SPFORCEFRQ=16,2,%s,%s",
     "AT+SPIMEI?",
-    "AT+SPIMEI=%d,\"%s\""
+    "AT+SPIMEI=%d,\"%s\"",
+    "AT+CCID",
+    "AT+CIMI",
+    "AT+CGEQOSRDP",
+    "+CGEQOSRDP:",
+    1, 6, 7,
+    "AT+CFUN?"
 };
 
 #define PROFILE_FIELD(member, key) { key, offsetof(ModemProfile, member), sizeof(((ModemProfile *)0)->member), g_default_profile.member }
@@ -81,7 +87,12 @@ static const ProfileStringField g_fields[] = {
     PROFILE_FIELD(cell_lock_lte, "cell_lock_lte"),
     PROFILE_FIELD(cell_lock_nr, "cell_lock_nr"),
     PROFILE_FIELD(imei_query, "imei_query"),
-    PROFILE_FIELD(imei_set, "imei_set")
+    PROFILE_FIELD(imei_set, "imei_set"),
+    PROFILE_FIELD(iccid_query, "iccid_query"),
+    PROFILE_FIELD(imsi_query, "imsi_query"),
+    PROFILE_FIELD(qos_query, "qos_query"),
+    PROFILE_FIELD(qos_response_prefix, "qos_response_prefix"),
+    PROFILE_FIELD(airplane_query, "airplane_query")
 };
 
 static ModemProfile g_profile_cache;
@@ -100,7 +111,10 @@ static const ProfileIntField g_int_fields[] = {
     PROFILE_INT_FIELD(cell_band_column, "cell_band_column"),
     PROFILE_INT_FIELD(cell_sinr_column, "cell_sinr_column"),
     PROFILE_INT_FIELD(cell_rsrp_column, "cell_rsrp_column"),
-    PROFILE_INT_FIELD(cell_rsrq_column, "cell_rsrq_column")
+    PROFILE_INT_FIELD(cell_rsrq_column, "cell_rsrq_column"),
+    PROFILE_INT_FIELD(qos_qci_index, "qos_qci_index"),
+    PROFILE_INT_FIELD(qos_downlink_index, "qos_downlink_index"),
+    PROFILE_INT_FIELD(qos_uplink_index, "qos_uplink_index")
 };
 
 static void make_key(char *key, size_t size, const char *field) {
@@ -238,6 +252,10 @@ const char *modem_profile_command(ModemProfileCommand command) {
     case MODEM_CMD_CELL_LOCK: source = profile.cell_lock; break;
     case MODEM_CMD_IMEI_QUERY: source = profile.imei_query; break;
     case MODEM_CMD_IMEI_SET: source = profile.imei_set; break;
+    case MODEM_CMD_ICCID_QUERY: source = profile.iccid_query; break;
+    case MODEM_CMD_IMSI_QUERY: source = profile.imsi_query; break;
+    case MODEM_CMD_QOS_QUERY: source = profile.qos_query; break;
+    case MODEM_CMD_AIRPLANE_QUERY: source = profile.airplane_query; break;
     default: break;
     }
     strncpy(value, source, sizeof(value) - 1);

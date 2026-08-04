@@ -17,7 +17,7 @@ aarch64 C 程序，通过 oFono D-Bus 控制模组；前端使用 Vue 3。默认
 - 支持频段查询、锁频段、查小区、锁小区等高级网络功能，并按模组配置选择解析策略。
 - 短信 Webhook 转发和原生 SMTP 邮件转发。邮件使用独立线程和持久化队列，不阻塞
   D-Bus 短信接收回调。
-- 流量统计、充电控制、飞行模式、IPv6 代理、Rathole、插件和脚本管理。
+- 流量统计、飞行模式、IPv6 代理、Rathole、插件和脚本管理。
 - UDX710 外部 USB Gadget 模式管理，支持 CDC-NCM、CDC-ECM、RNDIS。
 
 > USB Gadget 模式不是模组的 USB 组合模式。FM650 的 `AT+GTUSBMODE` 仅修改
@@ -110,6 +110,10 @@ chmod 755 /home/root/6677/server /home/root/6677/start.sh
 | `cell_lte_*`、`cell_nr_*` | LTE/NR 服务小区、邻区、小区锁定和解锁相关命令。 |
 | `cell_*_column` | `list_csv` 策略中 ARFCN、PCI、频段和信号值的 CSV 列编号。 |
 | `imei_query`、`imei_set` | IMEI 查询和写入命令。空的 `imei_set` 表示禁用 IMEI 写入。 |
+| `iccid_query`、`imsi_query`、`airplane_query` | ICCID、IMSI 和飞行模式查询命令。可留空以禁用对应采集。 |
+| `qos_query` | QCI 与签约上下行速率查询命令。留空则不采集 QoS。 |
+| `qos_response_prefix` | QoS 响应中数据行的前缀，例如 `+CGEQOSRDP:`。留空时从完整响应开头解析。 |
+| `qos_qci_index`、`qos_downlink_index`、`qos_uplink_index` | QoS 响应以逗号分隔后的 QCI、下行和上行字段序号，从 `0` 开始计数。 |
 
 ### 命令模板校验规则
 
@@ -165,7 +169,15 @@ chmod 755 /home/root/6677/server /home/root/6677/start.sh
   "cell_lock_lte": "AT+GTCELLLOCK=2,0,0,%s,%s",
   "cell_lock_nr": "AT+GTCELLLOCK=2,1,0,%s,%s",
   "imei_query": "AT+CGSN",
-  "imei_set": ""
+  "imei_set": "",
+  "iccid_query": "AT+CCID",
+  "imsi_query": "AT+CIMI",
+  "airplane_query": "AT+CFUN?",
+  "qos_query": "AT+CGEQOSRDP",
+  "qos_response_prefix": "+CGEQOSRDP:",
+  "qos_qci_index": 1,
+  "qos_downlink_index": 6,
+  "qos_uplink_index": 7
 }
 ```
 

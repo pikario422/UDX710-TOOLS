@@ -105,6 +105,10 @@ then click Save. The page exports a profile as JSON and imports it through
 | `band_set_lte`, `band_set_nr` | Band-set command templates. |
 | `cell_*` | Cell query, lock and CSV column-mapping fields. |
 | `imei_query`, `imei_set` | IMEI command templates. Empty `imei_set` disables IMEI writing. |
+| `iccid_query`, `imsi_query`, `airplane_query` | ICCID, IMSI, and airplane-mode query commands. Leave empty to disable collection. |
+| `qos_query` | QCI and negotiated-rate query command. Leave empty to disable QoS collection. |
+| `qos_response_prefix` | Prefix before the comma-separated QoS response values, such as `+CGEQOSRDP:`. |
+| `qos_qci_index`, `qos_downlink_index`, `qos_uplink_index` | Zero-based QCI, downlink, and uplink field positions in the QoS response. |
 
 Template validation rules:
 
@@ -162,7 +166,15 @@ column numbers.
   "cell_lock_lte": "AT+GTCELLLOCK=2,0,0,%s,%s",
   "cell_lock_nr": "AT+GTCELLLOCK=2,1,0,%s,%s",
   "imei_query": "AT+CGSN",
-  "imei_set": ""
+  "imei_set": "",
+  "iccid_query": "AT+CCID",
+  "imsi_query": "AT+CIMI",
+  "airplane_query": "AT+CFUN?",
+  "qos_query": "AT+CGEQOSRDP",
+  "qos_response_prefix": "+CGEQOSRDP:",
+  "qos_qci_index": 1,
+  "qos_downlink_index": 6,
+  "qos_uplink_index": 7
 }
 ```
 

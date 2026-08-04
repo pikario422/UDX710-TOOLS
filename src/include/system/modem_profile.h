@@ -23,7 +23,11 @@ typedef enum {
     MODEM_CMD_CELL_UNLOCK_NR,
     MODEM_CMD_CELL_LOCK,
     MODEM_CMD_IMEI_QUERY,
-    MODEM_CMD_IMEI_SET
+    MODEM_CMD_IMEI_SET,
+    MODEM_CMD_ICCID_QUERY,
+    MODEM_CMD_IMSI_QUERY,
+    MODEM_CMD_QOS_QUERY,
+    MODEM_CMD_AIRPLANE_QUERY
 } ModemProfileCommand;
 
 typedef struct {
@@ -67,6 +71,14 @@ typedef struct {
     char cell_lock_nr[128];
     char imei_query[96];
     char imei_set[128];
+    char iccid_query[96];
+    char imsi_query[96];
+    char qos_query[96];
+    char qos_response_prefix[32];
+    int qos_qci_index;
+    int qos_downlink_index;
+    int qos_uplink_index;
+    char airplane_query[96];
 } ModemProfile;
 
 /* Reload the persisted profile after the database is available. */

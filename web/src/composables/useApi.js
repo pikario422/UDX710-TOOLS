@@ -102,19 +102,6 @@ export async function deviceControl(action) {
   })
 }
 
-// 获取设备序列号
-export async function getDeviceSerial() {
-  return request('/api/serial')
-}
-
-// 提交激活码
-export async function submitActivationKey(key) {
-  return request('/api/key', {
-    method: 'POST',
-    body: JSON.stringify({ key })
-  })
-}
-
 // ==================== 网络管理API ====================
 
 // 切换飞行模式
@@ -277,32 +264,6 @@ export async function unlockCell() {
 }
 
 
-// ==================== 充电控制API ====================
-
-// 获取充电配置和电池状态
-export async function getChargeConfig() {
-  return request('/api/charge/config')
-}
-
-// 设置充电配置
-export async function setChargeConfig(enabled, startThreshold, stopThreshold) {
-  return request('/api/charge/config', {
-    method: 'POST',
-    body: JSON.stringify({ enabled, startThreshold, stopThreshold })
-  })
-}
-
-// 手动开启充电
-export async function chargeOn() {
-  return request('/api/charge/on', { method: 'POST' })
-}
-
-// 手动停止充电
-export async function chargeOff() {
-  return request('/api/charge/off', { method: 'POST' })
-}
-
-
 // ==================== AT命令调试API ====================
 
 // 执行AT命令
@@ -333,21 +294,6 @@ export async function usbAdvanceSwitch(mode) {
   return request('/api/usb-advance', {
     method: 'POST',
     body: JSON.stringify({ mode })
-  })
-}
-
-// ==================== APN配置API ====================
-
-// 获取APN列表
-export async function getApnList() {
-  return request('/api/apn')
-}
-
-// 设置APN配置
-export async function setApnConfig(config) {
-  return request('/api/apn', {
-    method: 'POST',
-    body: JSON.stringify(config)
   })
 }
 

@@ -24,6 +24,7 @@
 #define RATHOLE_TOKEN_SIZE          128      /* Token 最大长度 */
 #define RATHOLE_ADDR_SIZE           64       /* 地址最大长度 */
 #define RATHOLE_LOG_MAX_LINES       100      /* 日志最大行数 */
+#define RATHOLE_LOG_MAX_BYTES       (256 * 1024) /* 临时日志最大大小 */
 
 /* 路径配置 */
 #define RATHOLE_BIN_PATH            "/home/root/6677/rathole"
@@ -184,6 +185,9 @@ int rathole_get_status(RatholeStatus *status);
  * @return 实际读取的字节数 (<0 表示错误)
  */
 int rathole_get_logs(char *buf, size_t size, int max_lines);
+
+/* 周期性裁剪 /tmp 日志，避免 tmpfs 被外部进程日志填满。 */
+int rathole_maintenance(void);
 
 /**
  * 清空日志文件

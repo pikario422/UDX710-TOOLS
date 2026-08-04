@@ -16,6 +16,9 @@
 
 #define EMAIL_MAX_ATTEMPTS 5
 #define EMAIL_LOG_RESPONSE_SIZE 1024
+#define EMAIL_LOG_MAX_ROWS 200
+#define EMAIL_QUEUE_TERMINAL_MAX_ROWS 200
+#define EMAIL_QUEUE_PENDING_MAX_ROWS 200
 
 static pthread_mutex_t g_email_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_email_cond = PTHREAD_COND_INITIALIZER;
@@ -217,6 +220,16 @@ static void save_log(const char *sender, const char *status, int attempts,
              "VALUES ('%s','%s',%d,'%s',%ld);",
              escaped_sender, escaped_status, attempts, escaped_response, (long)time(NULL));
     db_execute_safe(sql);
+
+    /* 邮件记录用于诊断，不应随设备运行时间无限增长。 */
+    snprintf(sql, sizeof(sql),
+             "DELETE FROM sms_email_log WHERE id NOT IN ("
+             "SELECT id FROM sms_email_log ORDER BY id DESC LIMIT %d);"
+             "DELETE FROM sms_email_queue WHERE status IN ('sent','failed') "
+             "AND id NOT IN (SELECT id FROM sms_email_queue "
+             "WHERE status IN ('sent','failed') ORDER BY id DESC LIMIT %d);",
+             EMAIL_LOG_MAX_ROWS, EMAIL_QUEUE_TERMINAL_MAX_ROWS);
+    db_execute_safe(sql);
 }
 
 static void process_one_email(void) {
@@ -399,9 +412,15 @@ int sms_email_enqueue(const char *sender, const char *content, time_t timestamp)
     db_escape_string(sender, escaped_sender, sizeof(escaped_sender));
     db_escape_string(content, escaped_content, sizeof(escaped_content));
     snprintf(sql, sizeof(sql),
+             "BEGIN;"
              "INSERT INTO sms_email_queue (sender,content,timestamp,status,attempts,next_attempt,last_error,kind) "
-             "VALUES ('%s','%s',%ld,'pending',0,%ld,'','sms');",
-             escaped_sender, escaped_content, (long)timestamp, (long)time(NULL));
+             "VALUES ('%s','%s',%ld,'pending',0,%ld,'','sms');"
+             "DELETE FROM sms_email_queue WHERE status = 'pending' "
+             "AND id NOT IN (SELECT id FROM sms_email_queue "
+             "WHERE status = 'pending' ORDER BY id DESC LIMIT %d);"
+             "COMMIT;",
+             escaped_sender, escaped_content, (long)timestamp, (long)time(NULL),
+             EMAIL_QUEUE_PENDING_MAX_ROWS);
     if (db_execute_safe(sql) != 0) return -1;
 
     pthread_mutex_lock(&g_email_mutex);

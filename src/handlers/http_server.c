@@ -7,7 +7,6 @@
 #include "advanced.h"
 #include "apn.h"
 #include "auth.h"
-#include "charge.h"
 #include "dbus_core.h"
 #include "handlers.h"
 #include "http_utils.h"
@@ -56,24 +55,12 @@ static int is_auth_whitelist(const char *uri, const char *method,
   if (strncmp(uri, "/api/auth/status", 16) == 0)
     return 1;
 
-  /* 公开信息API - 仅GET请求无需认证 */
   int is_get = (method_len == 3 && memcmp(method, "GET", 3) == 0);
-  if (is_get) {
-    if (strncmp(uri, "/api/info", 9) == 0)
-      return 1;
-    if (strncmp(uri, "/api/charge/config", 18) == 0)
-      return 1;
-    if (strncmp(uri, "/api/current_band", 17) == 0)
-      return 1;
-  }
 
-  /* 设备控制API - POST和OPTIONS请求无需认证（OPTIONS用于CORS预检） */
+  /* OPTIONS 请求无需认证（用于 CORS 预检）。 */
   int is_post = (method_len == 4 && memcmp(method, "POST", 4) == 0);
   int is_options = (method_len == 7 && memcmp(method, "OPTIONS", 7) == 0);
-  if (is_post || is_options) {
-    if (strncmp(uri, "/api/device_control", 19) == 0)
-      return 1;
-  }
+  if (is_options) return 1;
 
   /* 忘记密码相关API - 无需认证 */
   if (is_get) {
@@ -211,14 +198,6 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       handle_set_reboot(c, hm);
     } else if (mg_match(hm->uri, mg_str("/api/claen/cron"), NULL)) {
       handle_clear_cron(c, hm);
-    }
-    /* 充电控制 API */
-    else if (mg_match(hm->uri, mg_str("/api/charge/config"), NULL)) {
-      handle_charge_config(c, hm);
-    } else if (mg_match(hm->uri, mg_str("/api/charge/on"), NULL)) {
-      handle_charge_on(c, hm);
-    } else if (mg_match(hm->uri, mg_str("/api/charge/off"), NULL)) {
-      handle_charge_off(c, hm);
     }
     /* 短信 API */
     else if (mg_match(hm->uri, mg_str("/api/sms"), NULL)) {
@@ -485,9 +464,6 @@ int http_server_start(const char *port) {
     printf("警告: D-Bus 初始化失败 (高级网络功能将不可用)\n");
   }
 
-  /* 初始化充电控制 */
-  init_charge();
-
   /* 初始化短信模块（必须在auth_init之前，因为auth依赖数据库） */
   if (sms_init("6677.db") != 0) {
     printf("警告: 短信模块初始化失败\n");
@@ -557,7 +533,7 @@ void http_server_stop(void) {
 
 void http_server_run(void) {
   GMainContext *context = g_main_context_default();
-  static int maintenance_counter = 0;
+  gint64 next_maintenance = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
 
   while (g_running) {
     /* 处理GLib/D-Bus事件 - 优先处理，确保信号不丢失 */
@@ -565,13 +541,14 @@ void http_server_run(void) {
       g_main_context_iteration(context, FALSE);
     }
 
-    /* 处理mongoose事件 - 减少超时时间以更快响应D-Bus信号 */
-    mg_mgr_poll(&g_mgr, 10); /* 10ms超时 */
+    /* 网络事件到达时会立即返回；空闲时无需每10ms唤醒一次。 */
+    mg_mgr_poll(&g_mgr, 100); /* 最多100ms延迟处理D-Bus事件 */
 
-    /* 每30秒执行一次短信模块维护（检查D-Bus连接） */
-    if (++maintenance_counter >= 3000) { /* 3000 * 10ms = 30秒 */
-      maintenance_counter = 0;
+    /* 定期检查 D-Bus 连接并限制外部服务日志的临时文件大小。 */
+    if (g_get_monotonic_time() >= next_maintenance) {
+      next_maintenance = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
       sms_maintenance();
+      rathole_maintenance();
     }
   }
 }
