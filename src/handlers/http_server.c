@@ -245,6 +245,16 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       handle_sms_webhook_test(c, hm);
     } else if (mg_match(hm->uri, mg_str("/api/sms/webhook/logs"), NULL)) {
       handle_sms_webhook_logs(c, hm);
+    } else if (mg_match(hm->uri, mg_str("/api/sms/email/test"), NULL)) {
+      handle_sms_email_test(c, hm);
+    } else if (mg_match(hm->uri, mg_str("/api/sms/email/logs"), NULL)) {
+      handle_sms_email_logs(c, hm);
+    } else if (mg_match(hm->uri, mg_str("/api/sms/email"), NULL)) {
+      if (hm->method.len == 3 && memcmp(hm->method.buf, "GET", 3) == 0) {
+        handle_sms_email_get(c, hm);
+      } else {
+        handle_sms_email_save(c, hm);
+      }
     } else if (mg_match(hm->uri, mg_str("/api/sms/fix"), NULL)) {
       if (hm->method.len == 3 && memcmp(hm->method.buf, "GET", 3) == 0) {
         handle_sms_fix_get(c, hm);
@@ -253,6 +263,15 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       }
     } else if (mg_match(hm->uri, mg_str("/api/sms/*"), NULL)) {
       handle_sms_delete(c, hm);
+    }
+    else if (mg_match(hm->uri, mg_str("/api/modem-profile/reset"), NULL)) {
+      handle_modem_profile_reset(c, hm);
+    } else if (mg_match(hm->uri, mg_str("/api/modem-profile"), NULL)) {
+      if (hm->method.len == 3 && memcmp(hm->method.buf, "GET", 3) == 0) {
+        handle_modem_profile_get(c, hm);
+      } else {
+        handle_modem_profile_save(c, hm);
+      }
     }
     /* OTA更新 API */
     else if (mg_match(hm->uri, mg_str("/api/update/version"), NULL)) {
@@ -466,9 +485,6 @@ int http_server_start(const char *port) {
     printf("警告: D-Bus 初始化失败 (高级网络功能将不可用)\n");
   }
 
-  /* 初始化流量统计 */
-  init_traffic();
-
   /* 初始化充电控制 */
   init_charge();
 
@@ -476,6 +492,9 @@ int http_server_start(const char *port) {
   if (sms_init("6677.db") != 0) {
     printf("警告: 短信模块初始化失败\n");
   }
+
+  /* Database-backed traffic settings are available after sms_init(). */
+  init_traffic();
 
   /* 初始化认证模块 */
   if (auth_init() != 0) {

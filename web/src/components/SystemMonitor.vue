@@ -43,6 +43,10 @@ async function fetchCurrentBand() {
     }
   } catch (err) {
     console.error('获取频段信息失败:', err)
+    if (err.message?.includes('409') && bandTimer) {
+      clearInterval(bandTimer)
+      bandTimer = null
+    }
   }
   bandLoading.value = false
 }

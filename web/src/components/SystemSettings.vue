@@ -24,7 +24,38 @@ const rebootTime = ref('')
 const selectedDays = ref([])
 const savingReboot = ref(false)
 const currentTime = ref('')
+let serverClockOffsetMs = null
 const syncingTime = ref(false)
+const modemProfile = ref(null)
+const modemProfileLoading = ref(false)
+const modemProfileSaving = ref(false)
+const modemProfileCommandsVisible = ref(false)
+const modemProfileFile = ref(null)
+
+const modemProfileCommandFields = [
+  { key: 'sms_cnmi_enabled', label: '短信接收上报', hint: '启用短信接收修复时发送' },
+  { key: 'sms_cnmi_disabled', label: '短信上报关闭', hint: '关闭短信接收修复时发送' },
+  { key: 'band_query_lte', label: '4G 频段查询' },
+  { key: 'band_query_nr', label: '5G 频段查询' },
+  { key: 'radio_off', label: '关闭射频' },
+  { key: 'radio_on', label: '开启射频' },
+  { key: 'pdp_reactivate', label: '重新激活数据连接' },
+  { key: 'band_reset_lte', label: '4G 频段解锁' },
+  { key: 'band_reset_nr', label: '5G 频段解锁' },
+  { key: 'band_set_lte', label: '4G 频段设置模板', hint: '保留两个 %d 占位符' },
+  { key: 'band_set_nr', label: '5G 频段设置模板', hint: '保留两个 %d 占位符' },
+  { key: 'cell_lte_serving', label: '4G 服务小区查询' },
+  { key: 'cell_lte_neighbor', label: '4G 邻区查询' },
+  { key: 'cell_nr_serving', label: '5G 服务小区查询' },
+  { key: 'cell_nr_neighbor', label: '5G 邻区查询' },
+  { key: 'cell_unlock_lte', label: '4G 小区解锁' },
+  { key: 'cell_unlock_nr', label: '5G 小区解锁' },
+  { key: 'cell_lock', label: '小区锁定模板', hint: '保留三个 %s 占位符' },
+  { key: 'cell_lock_lte', label: 'LTE 小区锁定模板', hint: '列表/CSV 策略使用两个 %s 占位符' },
+  { key: 'cell_lock_nr', label: 'NR 小区锁定模板', hint: '列表/CSV 策略使用两个 %s 占位符' },
+  { key: 'imei_query', label: 'IMEI 查询' },
+  { key: 'imei_set', label: 'IMEI 写入模板', hint: '留空则禁用写入；使用一个 %d 和一个 %s 占位符' }
+]
 
 // 密码修改相关
 const oldPassword = ref('')
@@ -132,6 +163,8 @@ async function fetchSystemTime() {
     const data = await getSystemTime()
     if (data.Code === 0 && data.Data) {
       currentTime.value = data.Data.datetime
+      const timestamp = Date.parse(data.Data.datetime.replace(' ', 'T'))
+      if (!Number.isNaN(timestamp)) serverClockOffsetMs = timestamp - Date.now()
     }
   } catch (err) {
     console.error('获取系统时间失败:', err)
@@ -152,6 +185,129 @@ async function handleSyncTime() {
     error(t('settings.syncFailed') + ': ' + err.message)
   } finally {
     syncingTime.value = false
+  }
+}
+
+function updateSystemTimeDisplay() {
+  if (serverClockOffsetMs === null) return
+  const date = new Date(Date.now() + serverClockOffsetMs)
+  const pad = value => String(value).padStart(2, '0')
+  currentTime.value = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+async function fetchModemProfile() {
+  modemProfileLoading.value = true
+  try {
+    const res = await api.get('/api/modem-profile')
+    if (res.ok) modemProfile.value = res.data
+    else error(res.data?.error || '获取模组适配档案失败')
+  } finally {
+    modemProfileLoading.value = false
+  }
+}
+
+async function saveModemProfile() {
+  if (!modemProfile.value) return
+  modemProfileSaving.value = true
+  try {
+    const res = await api.post('/api/modem-profile', modemProfile.value)
+    if (res.ok) {
+      modemProfile.value = res.data
+      success('模组适配档案已保存')
+    } else {
+      error(res.data?.error || '保存模组适配档案失败')
+    }
+  } finally {
+    modemProfileSaving.value = false
+  }
+}
+
+function applyFm650Profile() {
+  if (!modemProfile.value) return
+  modemProfile.value.name = 'Fibocom FM650 / oFono'
+  modemProfile.value.default_modem_path = '/ril_0'
+  modemProfile.value.slot1_modem_path = '/ril_0'
+  modemProfile.value.slot2_modem_path = '/ril_1'
+  modemProfile.value.default_context_path = '/ril_0/context2'
+  modemProfile.value.sms_cnmi_enabled = 'AT+CNMI=2,1,0,0,0'
+  modemProfile.value.sms_cnmi_disabled = 'AT+CNMI=2,0,0,0,0'
+  modemProfile.value.imei_query = 'AT+CGSN'
+  modemProfile.value.imei_set = ''
+  modemProfile.value.advanced_strategy = 'list_csv'
+  modemProfile.value.lte_band_offset = 100
+  modemProfile.value.nr_band_prefix = '50'
+  modemProfile.value.band_query_lte = 'AT+GTACT?'
+  modemProfile.value.band_query_nr = 'AT+GTACT?'
+  modemProfile.value.band_set_lte = 'AT+GTACT=2,3,%s'
+  modemProfile.value.band_set_nr = 'AT+GTACT=14,6,%s'
+  modemProfile.value.band_reset_lte = 'AT+GTACT=2,3,0'
+  modemProfile.value.band_reset_nr = 'AT+GTACT=14,6,0'
+  modemProfile.value.radio_off = 'AT+CFUN=0'
+  modemProfile.value.radio_on = 'AT+CFUN=1'
+  modemProfile.value.pdp_reactivate = 'AT+CGACT=1,1'
+  modemProfile.value.cell_lte_serving = 'AT+GTCCINFO?'
+  modemProfile.value.cell_lte_neighbor = 'AT+GTCCINFO?'
+  modemProfile.value.cell_nr_serving = 'AT+GTCCINFO?'
+  modemProfile.value.cell_nr_neighbor = 'AT+GTCCINFO?'
+  modemProfile.value.cell_unlock_lte = 'AT+GTCELLLOCK=0'
+  modemProfile.value.cell_unlock_nr = 'AT+GTCELLLOCK=0'
+  modemProfile.value.cell_lock_lte = 'AT+GTCELLLOCK=2,0,0,%s,%s'
+  modemProfile.value.cell_lock_nr = 'AT+GTCELLLOCK=2,1,0,%s,%s'
+  modemProfile.value.cell_lte_rat = 4
+  modemProfile.value.cell_nr_rat = 9
+  modemProfile.value.cell_serving_value = 1
+  modemProfile.value.cell_arfcn_column = 6
+  modemProfile.value.cell_pci_column = 7
+  modemProfile.value.cell_band_column = 8
+  modemProfile.value.cell_sinr_column = 10
+  modemProfile.value.cell_rsrp_column = 12
+  modemProfile.value.cell_rsrq_column = 13
+  modemProfile.value.advanced_network_enabled = true
+  success('已套用 FM650 预设，请保存档案')
+}
+
+function exportModemProfile() {
+  if (!modemProfile.value) return
+  const blob = new Blob([JSON.stringify(modemProfile.value, null, 2)], { type: 'application/json' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `${modemProfile.value.name || 'modem-profile'}.json`
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+function selectModemProfileFile() {
+  modemProfileFile.value?.click()
+}
+
+function importModemProfile(event) {
+  const [file] = event.target.files || []
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = async () => {
+    try {
+      const profile = JSON.parse(reader.result)
+      const res = await api.post('/api/modem-profile', profile)
+      if (!res.ok) throw new Error(res.data?.error || '导入失败')
+      modemProfile.value = res.data
+      success('模组适配档案已导入')
+    } catch (err) {
+      error(err.message || '档案格式无效')
+    } finally {
+      event.target.value = ''
+    }
+  }
+  reader.readAsText(file)
+}
+
+async function resetModemProfile() {
+  if (!await confirm({ title: '恢复默认模组档案', message: '这会覆盖当前模组适配配置。', danger: true })) return
+  const res = await api.post('/api/modem-profile/reset')
+  if (res.ok) {
+    modemProfile.value = res.data
+    success('已恢复默认模组档案')
+  } else {
+    error(res.data?.error || '恢复默认档案失败')
   }
 }
 
@@ -323,14 +479,15 @@ async function saveRebootConfig() {
   }
 }
 
-// 每秒更新系统时间（从API获取）
+// The server clock is sampled once; the per-second display is rendered locally.
 let timeInterval = null
 
 onMounted(() => {
   fetchRebootConfig()
   fetchSystemTime()
   fetchPhoneCaseStatus()
-  timeInterval = setInterval(fetchSystemTime, 1000)
+  fetchModemProfile()
+  timeInterval = setInterval(updateSystemTimeDisplay, 1000)
 })
 
 onUnmounted(() => {
@@ -506,6 +663,113 @@ onUnmounted(() => {
         <i :class="savingReboot ? 'fas fa-spinner animate-spin' : 'fas fa-save'" class="mr-2"></i>
         {{ savingReboot ? t('settings.saving') : t('settings.saveSettings') }}
       </button>
+    </div>
+
+    <div class="rounded-2xl bg-white/95 dark:bg-white/5 backdrop-blur border border-slate-200/60 dark:border-white/10 p-6 shadow-lg shadow-slate-200/40 dark:shadow-black/20">
+      <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+        <div>
+          <h3 class="text-slate-900 dark:text-white font-semibold flex items-center">
+            <i class="fas fa-microchip text-cyan-500 mr-2"></i>
+            模组适配档案
+          </h3>
+          <p class="text-slate-500 dark:text-white/50 text-sm mt-1">AT 命令和 oFono 路径的可迁移配置</p>
+        </div>
+        <span class="px-2.5 py-1 text-xs rounded-md" :class="modemProfile?.advanced_network_enabled ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300' : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'">
+          {{ modemProfile?.advanced_network_enabled ? '高级网络已启用' : '高级网络已禁用' }}
+        </span>
+      </div>
+
+      <div v-if="modemProfileLoading" class="py-8 text-center text-slate-500 dark:text-white/50">
+        <i class="fas fa-spinner fa-spin mr-2"></i>正在读取适配档案
+      </div>
+
+      <template v-else-if="modemProfile">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">档案名称</label>
+            <input v-model="modemProfile.name" maxlength="63" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg text-slate-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">默认 oFono Modem 路径</label>
+            <input v-model="modemProfile.default_modem_path" maxlength="63" placeholder="/ril_0" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">卡槽 1 oFono 路径</label>
+            <input v-model="modemProfile.slot1_modem_path" maxlength="63" placeholder="/ril_0" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">卡槽 2 oFono 路径</label>
+            <input v-model="modemProfile.slot2_modem_path" maxlength="63" placeholder="/ril_1" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">数据 Context 回退路径</label>
+            <input v-model="modemProfile.default_context_path" maxlength="127" placeholder="/ril_0/context2" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" />
+          </div>
+          <div>
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-2">高级网络策略</label>
+            <select v-model="modemProfile.advanced_strategy" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg text-slate-900 dark:text-white">
+              <option value="bitmask_matrix">位掩码 / 矩阵响应</option>
+              <option value="list_csv">频段列表 / CSV 响应</option>
+            </select>
+          </div>
+          <div v-if="modemProfile.advanced_strategy === 'list_csv'" class="grid grid-cols-2 gap-3">
+            <div><label class="block text-slate-600 dark:text-white/60 text-sm mb-2">LTE 编码偏移</label><input v-model.number="modemProfile.lte_band_offset" type="number" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" /></div>
+            <div><label class="block text-slate-600 dark:text-white/60 text-sm mb-2">NR 编码前缀</label><input v-model="modemProfile.nr_band_prefix" maxlength="7" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm text-slate-900 dark:text-white" /></div>
+          </div>
+        </div>
+
+        <div v-if="modemProfile.advanced_strategy === 'list_csv'" class="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">LTE RAT</label><input v-model.number="modemProfile.cell_lte_rat" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">NR RAT</label><input v-model.number="modemProfile.cell_nr_rat" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">服务小区值</label><input v-model.number="modemProfile.cell_serving_value" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">ARFCN 列</label><input v-model.number="modemProfile.cell_arfcn_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">PCI 列</label><input v-model.number="modemProfile.cell_pci_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">Band 列</label><input v-model.number="modemProfile.cell_band_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">SINR 列</label><input v-model.number="modemProfile.cell_sinr_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">RSRP 列</label><input v-model.number="modemProfile.cell_rsrp_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+          <div><label class="block text-slate-600 dark:text-white/60 text-xs mb-1">RSRQ 列</label><input v-model.number="modemProfile.cell_rsrq_column" type="number" class="w-full px-2 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-sm" /></div>
+        </div>
+
+        <label class="mt-5 flex items-center justify-between gap-4 p-3 border border-slate-200 dark:border-white/10 rounded-lg cursor-pointer">
+          <span>
+            <span class="block text-slate-900 dark:text-white text-sm font-medium">启用高级网络功能</span>
+            <span class="block text-slate-500 dark:text-white/50 text-xs mt-1">频段、小区查询和锁定依赖私有 AT 指令；不支持时请关闭。</span>
+          </span>
+          <input v-model="modemProfile.advanced_network_enabled" type="checkbox" class="w-4 h-4 accent-cyan-500" />
+        </label>
+
+        <button @click="modemProfileCommandsVisible = !modemProfileCommandsVisible" class="mt-5 flex items-center gap-2 text-sm text-cyan-600 dark:text-cyan-300 hover:text-cyan-700">
+          <i :class="modemProfileCommandsVisible ? 'fas fa-chevron-up' : 'fas fa-chevron-down'"></i>
+          {{ modemProfileCommandsVisible ? '收起 AT 命令模板' : '编辑 AT 命令模板' }}
+        </button>
+
+        <div v-if="modemProfileCommandsVisible" class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div v-for="field in modemProfileCommandFields" :key="field.key">
+            <label class="block text-slate-600 dark:text-white/60 text-sm mb-1">{{ field.label }}</label>
+            <input v-model="modemProfile[field.key]" class="w-full px-3 py-2 bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/20 rounded-lg font-mono text-xs text-slate-900 dark:text-white" />
+            <p v-if="field.hint" class="text-xs text-slate-400 dark:text-white/40 mt-1">{{ field.hint }}</p>
+          </div>
+        </div>
+
+        <div class="mt-6 flex flex-wrap gap-3">
+          <button @click="saveModemProfile" :disabled="modemProfileSaving" class="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-sm rounded-lg disabled:opacity-50">
+            <i :class="modemProfileSaving ? 'fas fa-spinner fa-spin' : 'fas fa-save'" class="mr-2"></i>{{ modemProfileSaving ? '保存中' : '保存档案' }}
+          </button>
+          <button @click="applyFm650Profile" class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded-lg">
+            <i class="fas fa-bolt mr-2"></i>套用 FM650 预设
+          </button>
+          <button @click="exportModemProfile" class="px-4 py-2.5 border border-slate-300 dark:border-white/20 text-slate-700 dark:text-white/80 text-sm rounded-lg hover:bg-slate-100 dark:hover:bg-white/10">
+            <i class="fas fa-download mr-2"></i>导出 JSON
+          </button>
+          <button @click="selectModemProfileFile" class="px-4 py-2.5 border border-slate-300 dark:border-white/20 text-slate-700 dark:text-white/80 text-sm rounded-lg hover:bg-slate-100 dark:hover:bg-white/10">
+            <i class="fas fa-upload mr-2"></i>导入 JSON
+          </button>
+          <button @click="resetModemProfile" class="px-4 py-2.5 text-red-600 dark:text-red-300 text-sm rounded-lg hover:bg-red-500/10">
+            <i class="fas fa-undo mr-2"></i>恢复默认
+          </button>
+          <input ref="modemProfileFile" type="file" accept="application/json,.json" class="hidden" @change="importModemProfile" />
+        </div>
+      </template>
     </div>
 
     <!-- 账户安全 -->

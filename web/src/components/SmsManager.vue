@@ -29,6 +29,11 @@ const showSentSelectMode = ref(false)
 const showTutorial = ref(false)
 const showWebhookLogs = ref(false)
 const webhookLogs = ref([])
+const emailLogs = ref([])
+const emailConfig = ref({
+  enabled: false, server: 'smtp.qq.com', port: 465, username: '', password: '',
+  from_addr: '', to_addr: '', password_set: false
+})
 
 const webhookConfig = ref({
   enabled: false, platform: 'pushplus', url: 'http://www.pushplus.plus/send',
@@ -89,6 +94,47 @@ async function fetchSmsConfig() {
     const res = await authFetch('/api/sms/config')
     if (res.ok) smsConfig.value = await res.json()
   } catch (e) { console.error('获取短信配置失败:', e) }
+}
+
+async function fetchEmailConfig() {
+  try {
+    const res = await authFetch('/api/sms/email')
+    if (res.ok) {
+      const data = await res.json()
+      emailConfig.value = { ...emailConfig.value, ...data, password: '' }
+    }
+  } catch (e) { console.error('获取邮件转发配置失败:', e) }
+}
+
+async function saveEmailConfig() {
+  try {
+    const res = await authFetch('/api/sms/email', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(emailConfig.value)
+    })
+    const result = await res.json()
+    showStatus(result.status === 'success', result.status === 'success' ? '邮件转发配置已保存' : result.error || '保存失败')
+    if (result.status === 'success') fetchEmailConfig()
+  } catch (e) { showStatus(false, '保存失败') }
+}
+
+async function testEmailConfig() {
+  try {
+    const res = await authFetch('/api/sms/email/test', { method: 'POST' })
+    const result = await res.json()
+    showStatus(result.status === 'success', result.status === 'success' ? '测试邮件已加入队列' : result.error || '测试失败')
+    if (result.status === 'success') setTimeout(fetchEmailLogs, 1000)
+  } catch (e) { showStatus(false, '测试失败') }
+}
+
+async function fetchEmailLogs() {
+  try {
+    const res = await authFetch('/api/sms/email/logs?lines=10')
+    if (res.ok) {
+      const data = await res.json()
+      emailLogs.value = data.data || []
+    }
+  } catch (e) { console.error('获取邮件日志失败:', e) }
 }
 
 async function sendSmsApi(recipient, content) {
@@ -163,7 +209,7 @@ async function toggleSmsFix() {
 
 let refreshTimer = null
 onMounted(() => {
-  fetchSmsList(); fetchSentList(); fetchWebhookConfig(); fetchSmsConfig(); fetchSmsFixStatus()
+  fetchSmsList(); fetchSentList(); fetchWebhookConfig(); fetchEmailConfig(); fetchSmsConfig(); fetchSmsFixStatus()
   refreshTimer = setInterval(() => { fetchSmsList(); fetchSentList() }, 10000)
 })
 onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
@@ -175,6 +221,8 @@ watch(activeTab, (newTab) => {
     fetchSmsFixStatus()
   } else if (newTab === 'forward') {
     fetchWebhookConfig()
+    fetchEmailConfig()
+    fetchEmailLogs()
   }
 })
 
@@ -453,6 +501,37 @@ async function saveSmsConfig() {
         <div>
           <label class="text-slate-600 dark:text-white/60 text-sm mb-2 block">{{ t('sms.requestHeaders') }}</label>
           <textarea v-model="webhookConfig.headers" rows="2" class="w-full px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-white/30 focus:border-emerald-500/50 focus:outline-none transition-all resize-none font-mono text-sm"></textarea>
+        </div>
+      </div>
+      <div class="mt-8 pt-6 border-t border-slate-200 dark:border-white/10 space-y-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-rose-500/15 flex items-center justify-center"><i class="fas fa-envelope text-rose-500"></i></div>
+            <div><h4 class="text-slate-900 dark:text-white font-medium">短信邮件转发</h4><p class="text-slate-500 dark:text-white/40 text-xs">由原生服务异步投递，不依赖插件或轮询</p></div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" v-model="emailConfig.enabled" class="sr-only peer" />
+            <div class="w-14 h-7 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[4px] after:bg-white after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-rose-500"></div>
+          </label>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <input v-model.trim="emailConfig.server" type="text" placeholder="SMTP 服务器，例如 smtp.qq.com" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+          <input v-model.number="emailConfig.port" type="number" min="1" max="65535" placeholder="端口，例如 465" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+          <input v-model.trim="emailConfig.username" type="text" placeholder="SMTP 登录账号" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+          <input v-model="emailConfig.password" type="password" :placeholder="emailConfig.password_set ? '已保存，留空则不修改' : 'SMTP 授权码或密码'" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+          <input v-model.trim="emailConfig.from_addr" type="email" placeholder="发件人地址" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+          <input v-model.trim="emailConfig.to_addr" type="email" placeholder="收件人地址" class="px-4 py-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-sm focus:border-rose-500/50 focus:outline-none" />
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button @click="saveEmailConfig" class="px-4 py-2 bg-rose-500/15 text-rose-600 dark:text-rose-300 rounded-xl hover:bg-rose-500/25 transition-all border border-rose-500/25"><i class="fas fa-save mr-1"></i>保存邮件配置</button>
+          <button @click="testEmailConfig" class="px-4 py-2 bg-blue-500/15 text-blue-600 dark:text-blue-300 rounded-xl hover:bg-blue-500/25 transition-all border border-blue-500/25"><i class="fas fa-paper-plane mr-1"></i>发送测试邮件</button>
+          <button @click="fetchEmailLogs" title="刷新邮件日志" class="w-10 h-10 bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-white/60 rounded-xl hover:bg-slate-200 dark:hover:bg-white/20 transition-all"><i class="fas fa-sync-alt"></i></button>
+        </div>
+        <div v-if="emailLogs.length" class="border border-slate-200 dark:border-white/10 rounded-xl divide-y divide-slate-200 dark:divide-white/10 overflow-hidden">
+          <div v-for="log in emailLogs" :key="log.id" class="px-3 py-2 text-xs flex items-start justify-between gap-3 bg-slate-50 dark:bg-white/5">
+            <div class="min-w-0"><span class="font-medium text-slate-700 dark:text-white/80">{{ log.sender }}</span><span class="ml-2 text-slate-400">{{ formatLogTime(log.created_at) }}</span><p class="mt-1 text-slate-500 dark:text-white/45 break-words">{{ log.response || '已提交 SMTP 服务器' }}</p></div>
+            <span :class="log.status === 'sent' ? 'text-emerald-600 dark:text-emerald-400' : log.status === 'retry' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'">{{ log.status === 'sent' ? '成功' : log.status === 'retry' ? '重试中' : '失败' }}</span>
+          </div>
         </div>
       </div>
     </div>

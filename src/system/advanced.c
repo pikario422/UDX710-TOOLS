@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <glib.h>
 #include "mongoose.h"
@@ -15,6 +16,7 @@
 #include "http_utils.h"
 #include "ofono.h"
 #include "json_builder.h"
+#include "modem_profile.h"
 
 /* 频段映射结构 */
 typedef struct {
@@ -44,6 +46,44 @@ static const BandMapping band_map[] = {
     {"N79", "5G", "TDD", 512},
     {NULL, NULL, NULL, 0}
 };
+
+static int require_advanced_network_profile(struct mg_connection *c) {
+    if (modem_profile_advanced_network_enabled()) return 1;
+    HTTP_ERROR(c, 409, "Advanced network commands are disabled by the modem profile");
+    return 0;
+}
+
+static int use_list_csv_profile(ModemProfile *profile) {
+    modem_profile_get(profile);
+    return strcmp(profile->advanced_strategy, "list_csv") == 0;
+}
+
+static int output_has_number(const char *output, int value) {
+    char needle[16];
+    const char *p;
+    snprintf(needle, sizeof(needle), "%d", value);
+    for (p = output ? output : ""; (p = strstr(p, needle)) != NULL; p++) {
+        if ((p == output || !isdigit((unsigned char)p[-1])) &&
+            !isdigit((unsigned char)p[strlen(needle)])) return 1;
+    }
+    return 0;
+}
+
+static int band_number(const BandMapping *band) {
+    return band->name[0] == 'N' ? atoi(band->name + 1) : atoi(strrchr(band->name, '_') + 1);
+}
+
+static void append_list_band(char *list, size_t size, const ModemProfile *profile,
+                             const BandMapping *band) {
+    char value[24];
+    int number = band_number(band);
+    if (strcmp(band->mode, "4G") == 0)
+        snprintf(value, sizeof(value), "%d", profile->lte_band_offset + number);
+    else
+        snprintf(value, sizeof(value), "%s%d", profile->nr_band_prefix, number);
+    if (list[0]) strncat(list, ",", size - strlen(list) - 1);
+    strncat(list, value, size - strlen(list) - 1);
+}
 
 /* 解析频段锁定状态 */
 static void parse_bands_info(const char *output4G, const char *output5G, int *bands) {
@@ -92,23 +132,35 @@ static void parse_bands_info(const char *output4G, const char *output5G, int *ba
 /* GET /api/bands - 获取频段状态 */
 void handle_get_bands(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_GET(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     char *result4G = NULL, *result5G = NULL;
     int bands[16] = {0};
+    ModemProfile profile;
+    int list_csv = use_list_csv_profile(&profile);
 
     printf("开始获取频段锁定状态...\n");
 
     /* 查询4G频段 */
-    if (execute_at("AT+SPLBAND=0", &result4G) == 0) {
+    if (execute_at(modem_profile_command(MODEM_CMD_BAND_QUERY_LTE), &result4G) == 0) {
         printf("4G频段查询结果: %s\n", result4G);
     }
 
-    /* 查询5G频段 */
-    if (execute_at("AT+SPLBAND=3", &result5G) == 0) {
+    /* List strategies use one query that contains both LTE and NR bands. */
+    if (!list_csv && execute_at(modem_profile_command(MODEM_CMD_BAND_QUERY_NR), &result5G) == 0) {
         printf("5G频段查询结果: %s\n", result5G);
     }
 
-    parse_bands_info(result4G, result5G, bands);
+    if (list_csv) {
+        for (int i = 0; band_map[i].name; i++) {
+            int value = strcmp(band_map[i].mode, "4G") == 0 ?
+                profile.lte_band_offset + band_number(&band_map[i]) :
+                atoi(profile.nr_band_prefix) * (band_number(&band_map[i]) < 10 ? 10 : 100) + band_number(&band_map[i]);
+            bands[i] = output_has_number(result4G, value);
+        }
+    } else {
+        parse_bands_info(result4G, result5G, bands);
+    }
 
     if (result4G) g_free(result4G);
     if (result5G) g_free(result5G);
@@ -189,17 +241,27 @@ static int parse_bands_array(const char *json_str, char bands[][32], int max_ban
 /* POST /api/lock_bands - 锁定频段 */
 void handle_lock_bands(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_POST(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     char bands[32][32] = {{0}};
     int band_count = parse_bands_array(hm->body.buf, bands, 32);
 
     printf("收到锁频请求，要锁定的频段数量: %d\n", band_count);
 
-    /* 计算位掩码 */
+    ModemProfile profile;
+    int list_csv = use_list_csv_profile(&profile);
+    char lte_list[256] = {0}, nr_list[256] = {0};
+    /* Calculate either platform bitmasks or standard list values from the UI bands. */
     int tdd4G = 0, fdd4G = 0, fdd5G = 0, tdd5G = 0;
     for (int i = 0; i < band_count; i++) {
         const BandMapping *bm = find_band(bands[i]);
         if (bm) {
+            if (list_csv) {
+                append_list_band(strcmp(bm->mode, "4G") == 0 ? lte_list : nr_list,
+                                 strcmp(bm->mode, "4G") == 0 ? sizeof(lte_list) : sizeof(nr_list),
+                                 &profile, bm);
+                continue;
+            }
             printf("处理频段 %s: 模式=%s, 类型=%s, 值=%d\n", bm->name, bm->mode, bm->type, bm->value);
             if (strcmp(bm->mode, "4G") == 0 && strcmp(bm->type, "TDD") == 0) {
                 tdd4G |= bm->value;
@@ -220,7 +282,7 @@ void handle_lock_bands(struct mg_connection *c, struct mg_http_message *hm) {
 
     /* 执行命令序列 */
     /* 1. 关闭设备 */
-    if (execute_at("AT+SFUN=5", &result) != 0) {
+    if (execute_at(modem_profile_command(MODEM_CMD_RADIO_OFF), &result) != 0) {
         HTTP_ERROR(c, 500, "关闭设备失败");
         if (result) g_free(result);
         return;
@@ -229,33 +291,35 @@ void handle_lock_bands(struct mg_connection *c, struct mg_http_message *hm) {
     usleep(300000);
 
     /* 2. 解锁5G频段 */
-    execute_at("AT+SPLBAND=2,0,0,0,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_BAND_RESET_NR), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 3. 锁定4G频段 */
-    if (tdd4G != 0 || fdd4G != 0) {
-        snprintf(cmd, sizeof(cmd), "AT+SPLBAND=1,0,%d,0,%d,0", tdd4G, fdd4G);
+    if ((list_csv && lte_list[0]) || (!list_csv && (tdd4G != 0 || fdd4G != 0))) {
+        if (list_csv) snprintf(cmd, sizeof(cmd), modem_profile_command(MODEM_CMD_BAND_SET_LTE), lte_list);
+        else snprintf(cmd, sizeof(cmd), modem_profile_command(MODEM_CMD_BAND_SET_LTE), tdd4G, fdd4G);
         execute_at(cmd, &result);
         if (result) { g_free(result); result = NULL; }
         usleep(300000);
     }
 
     /* 4. 锁定5G频段 */
-    if (fdd5G != 0 || tdd5G != 0) {
-        snprintf(cmd, sizeof(cmd), "AT+SPLBAND=2,%d,0,%d,0", fdd5G, tdd5G);
+    if ((list_csv && nr_list[0]) || (!list_csv && (fdd5G != 0 || tdd5G != 0))) {
+        if (list_csv) snprintf(cmd, sizeof(cmd), modem_profile_command(MODEM_CMD_BAND_SET_NR), nr_list);
+        else snprintf(cmd, sizeof(cmd), modem_profile_command(MODEM_CMD_BAND_SET_NR), fdd5G, tdd5G);
         execute_at(cmd, &result);
         if (result) { g_free(result); result = NULL; }
         usleep(300000);
     }
 
     /* 5. 开启设备 */
-    execute_at("AT+SFUN=4", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_ON), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 6. 激活网络 */
-    execute_at("AT+CGACT=0,1", &result);
+    execute_at(modem_profile_command(MODEM_CMD_PDP_REACTIVATE), &result);
     if (result) g_free(result);
 
     printf("频段锁定成功\n");
@@ -271,12 +335,13 @@ void handle_lock_bands(struct mg_connection *c, struct mg_http_message *hm) {
 /* POST /api/unlock_bands - 解锁所有频段 */
 void handle_unlock_bands(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_POST(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     printf("开始解锁所有频段...\n");
     char *result = NULL;
 
     /* 1. 关闭设备 */
-    if (execute_at("AT+SFUN=5", &result) != 0) {
+    if (execute_at(modem_profile_command(MODEM_CMD_RADIO_OFF), &result) != 0) {
         HTTP_ERROR(c, 500, "关闭设备失败");
         if (result) g_free(result);
         return;
@@ -285,22 +350,22 @@ void handle_unlock_bands(struct mg_connection *c, struct mg_http_message *hm) {
     usleep(300000);
 
     /* 2. 解锁4G频段 */
-    execute_at("AT+SPLBAND=1,0,0,0,0,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_BAND_RESET_LTE), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 3. 解锁5G频段 */
-    execute_at("AT+SPLBAND=2,0,0,0,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_BAND_RESET_NR), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 4. 开启设备 */
-    execute_at("AT+SFUN=4", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_ON), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 5. 激活网络 */
-    execute_at("AT+CGACT=0,1", &result);
+    execute_at(modem_profile_command(MODEM_CMD_PDP_REACTIVATE), &result);
     if (result) g_free(result);
 
     printf("频段解锁成功\n");
@@ -394,9 +459,42 @@ static void add_cell_to_json(JsonBuilder *j, const char *rat, const char *band_p
     json_obj_close(j);
 }
 
+static int add_csv_cells_to_json(JsonBuilder *j, const char *output,
+                                 const ModemProfile *profile) {
+    char copy[4096], *line, *save_line = NULL;
+    int count = 0;
+    if (!output) return 0;
+    strncpy(copy, output, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    for (line = strtok_r(copy, "\r\n", &save_line); line;
+         line = strtok_r(NULL, "\r\n", &save_line)) {
+        char *fields[16] = {0}, *token, *save_field = NULL;
+        int n = 0, rat;
+        while (*line == ' ') line++;
+        if (!isdigit((unsigned char)*line)) continue;
+        for (token = strtok_r(line, ",", &save_field); token && n < 16;
+             token = strtok_r(NULL, ",", &save_field)) fields[n++] = token;
+        if (n <= profile->cell_rsrq_column) continue;
+        rat = atoi(fields[1]);
+        if (rat != profile->cell_lte_rat && rat != profile->cell_nr_rat) continue;
+        add_cell_to_json(j, rat == profile->cell_nr_rat ? "5G" : "4G",
+                         rat == profile->cell_nr_rat ? "N" : "B",
+                         fields[profile->cell_band_column],
+                         atoi(fields[profile->cell_arfcn_column]),
+                         atoi(fields[profile->cell_pci_column]),
+                         atof(fields[profile->cell_rsrp_column]),
+                         atof(fields[profile->cell_rsrq_column]),
+                         atof(fields[profile->cell_sinr_column]),
+                         atoi(fields[0]) == profile->cell_serving_value);
+        count++;
+    }
+    return count;
+}
+
 /* GET /api/cells - 获取小区信息 */
 void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_GET(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     printf("开始获取小区信息...\n");
     char *result = NULL;
@@ -412,10 +510,21 @@ void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
     json_arr_open(j, "Data");
     
     int cell_count = 0;
+    ModemProfile profile;
+    if (use_list_csv_profile(&profile)) {
+        if (execute_at(modem_profile_command(MODEM_CMD_CELL_LTE_SERVING), &result) == 0) {
+            cell_count = add_csv_cells_to_json(j, result, &profile);
+        }
+        if (result) g_free(result);
+        json_arr_close(j);
+        json_obj_close(j);
+        HTTP_OK_FREE(c, json_finish(j));
+        return;
+    }
 
     if (is_5g) {
         /* 5G 主小区 */
-        if (execute_at("AT+SPENGMD=0,14,1", &result) == 0 && result) {
+        if (execute_at(modem_profile_command(MODEM_CMD_CELL_NR_SERVING), &result) == 0 && result) {
             char data[64][16][32] = {{{0}}};
             int rows = parse_cell_to_vec(result, data);
             if (rows > 15) {
@@ -430,7 +539,7 @@ void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
         }
 
         /* 5G 邻小区 */
-        if (execute_at("AT+SPENGMD=0,14,2", &result) == 0 && result) {
+        if (execute_at(modem_profile_command(MODEM_CMD_CELL_NR_NEIGHBOR), &result) == 0 && result) {
             char data[64][16][32] = {{{0}}};
             int rows = parse_cell_to_vec(result, data);
             if (rows > 5) {
@@ -458,7 +567,7 @@ void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
         }
     } else {
         /* 4G 主小区 */
-        if (execute_at("AT+SPENGMD=0,6,0", &result) == 0 && result) {
+        if (execute_at(modem_profile_command(MODEM_CMD_CELL_LTE_SERVING), &result) == 0 && result) {
             char data[64][16][32] = {{{0}}};
             int rows = parse_cell_to_vec(result, data);
             if (rows > 33) {
@@ -473,7 +582,7 @@ void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
         }
 
         /* 4G 邻小区 */
-        if (execute_at("AT+SPENGMD=0,6,6", &result) == 0 && result) {
+        if (execute_at(modem_profile_command(MODEM_CMD_CELL_LTE_NEIGHBOR), &result) == 0 && result) {
             char data[64][16][32] = {{{0}}};
             int rows = parse_cell_to_vec(result, data);
             for (int i = 0; i < rows; i++) {
@@ -509,6 +618,7 @@ void handle_get_cells(struct mg_connection *c, struct mg_http_message *hm) {
 /* POST /api/lock_cell - 锁定小区 */
 void handle_lock_cell(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_POST(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     char technology[32] = {0}, arfcn[32] = {0}, pci[32] = {0};
 
@@ -532,35 +642,41 @@ void handle_lock_cell(struct mg_connection *c, struct mg_http_message *hm) {
 
     char *result = NULL;
     char cmd[128];
+    ModemProfile profile;
 
     /* 1. 关闭射频 */
-    execute_at("AT+SFUN=5", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_OFF), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 2. 解锁4G */
-    execute_at("AT+SPFORCEFRQ=12,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_CELL_UNLOCK_LTE), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 3. 解锁5G */
-    execute_at("AT+SPFORCEFRQ=16,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_CELL_UNLOCK_NR), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 4. 锁定小区 */
-    snprintf(cmd, sizeof(cmd), "AT+SPFORCEFRQ=%s,2,%s,%s", band, arfcn, pci);
+    if (use_list_csv_profile(&profile)) {
+        snprintf(cmd, sizeof(cmd), strstr(technology, "5G") || strstr(technology, "NR") ?
+                 profile.cell_lock_nr : profile.cell_lock_lte, arfcn, pci);
+    } else {
+        snprintf(cmd, sizeof(cmd), modem_profile_command(MODEM_CMD_CELL_LOCK), band, arfcn, pci);
+    }
     execute_at(cmd, &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 5. 打开射频 */
-    execute_at("AT+SFUN=4", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_ON), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 6. 激活网络 */
-    execute_at("AT+CGACT=0,1", &result);
+    execute_at(modem_profile_command(MODEM_CMD_PDP_REACTIVATE), &result);
     if (result) g_free(result);
 
     printf("小区锁定成功\n");
@@ -579,32 +695,33 @@ void handle_lock_cell(struct mg_connection *c, struct mg_http_message *hm) {
 /* POST /api/unlock_cell - 解锁小区 */
 void handle_unlock_cell(struct mg_connection *c, struct mg_http_message *hm) {
     HTTP_CHECK_POST(c, hm);
+    if (!require_advanced_network_profile(c)) return;
 
     printf("开始解锁小区...\n");
     char *result = NULL;
 
     /* 1. 关闭射频 */
-    execute_at("AT+SFUN=5", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_OFF), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 2. 解锁4G */
-    execute_at("AT+SPFORCEFRQ=12,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_CELL_UNLOCK_LTE), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 3. 解锁5G */
-    execute_at("AT+SPFORCEFRQ=16,0", &result);
+    execute_at(modem_profile_command(MODEM_CMD_CELL_UNLOCK_NR), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 4. 打开射频 */
-    execute_at("AT+SFUN=4", &result);
+    execute_at(modem_profile_command(MODEM_CMD_RADIO_ON), &result);
     if (result) { g_free(result); result = NULL; }
     usleep(300000);
 
     /* 5. 激活网络 */
-    execute_at("AT+CGACT=0,1", &result);
+    execute_at(modem_profile_command(MODEM_CMD_PDP_REACTIVATE), &result);
     if (result) g_free(result);
 
     printf("小区解锁成功\n");

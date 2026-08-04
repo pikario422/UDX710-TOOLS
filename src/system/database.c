@@ -56,6 +56,36 @@ static int db_create_tables(void) {
         "max_sent_count INTEGER DEFAULT 10,"
         "sms_fix_enabled INTEGER DEFAULT 0"
         ");"
+        "CREATE TABLE IF NOT EXISTS sms_email_config ("
+        "id INTEGER PRIMARY KEY,"
+        "enabled INTEGER DEFAULT 0,"
+        "smtp_server TEXT,"
+        "smtp_port INTEGER DEFAULT 465,"
+        "smtp_user TEXT,"
+        "smtp_password TEXT,"
+        "from_addr TEXT,"
+        "to_addr TEXT"
+        ");"
+        "CREATE TABLE IF NOT EXISTS sms_email_queue ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "sender TEXT NOT NULL,"
+        "content TEXT NOT NULL,"
+        "timestamp INTEGER NOT NULL,"
+        "status TEXT NOT NULL DEFAULT 'pending',"
+        "attempts INTEGER NOT NULL DEFAULT 0,"
+        "next_attempt INTEGER NOT NULL,"
+        "last_error TEXT,"
+        "kind TEXT NOT NULL DEFAULT 'sms'"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_sms_email_queue_pending ON sms_email_queue(status,next_attempt,id);"
+        "CREATE TABLE IF NOT EXISTS sms_email_log ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "sender TEXT,"
+        "status TEXT NOT NULL,"
+        "attempts INTEGER NOT NULL,"
+        "response TEXT,"
+        "created_at INTEGER NOT NULL"
+        ");"
         "CREATE TABLE IF NOT EXISTS config ("
         "key TEXT PRIMARY KEY,"
         "value TEXT"
@@ -119,9 +149,16 @@ int db_execute(const char *sql) {
     /* 对于长SQL或包含特殊字符的SQL，使用临时文件 */
     size_t sql_len = strlen(sql);
     if (sql_len > 1000 || strchr(sql, '"') || strchr(sql, '\n')) {
-        const char *tmp_sql = "/tmp/db_sql.tmp";
-        FILE *fp = fopen(tmp_sql, "w");
+        char tmp_sql[] = "/tmp/db_sql_XXXXXX";
+        int fd = mkstemp(tmp_sql);
+        if (fd < 0) {
+            printf("[DB] SQL执行失败: 无法创建临时文件\n");
+            return -1;
+        }
+        FILE *fp = fdopen(fd, "w");
         if (!fp) {
+            close(fd);
+            unlink(tmp_sql);
             printf("[DB] SQL执行失败: 无法创建临时文件\n");
             return -1;
         }
@@ -338,15 +375,19 @@ int config_get(const char *key, char *value, size_t value_size) {
 }
 
 int config_set(const char *key, const char *value) {
-    char sql[1024];
+    char sql[4096];
+    char escaped_key[256];
+    char escaped_value[3072];
     
     if (!key || !value) {
         return -1;
     }
     
+    db_escape_string(key, escaped_key, sizeof(escaped_key));
+    db_escape_string(value, escaped_value, sizeof(escaped_value));
     snprintf(sql, sizeof(sql),
         "INSERT OR REPLACE INTO config (key, value) VALUES ('%s', '%s');",
-        key, value);
+        escaped_key, escaped_value);
     
     return db_execute_safe(sql);
 }

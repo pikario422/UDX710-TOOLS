@@ -11,6 +11,7 @@
 #include "ofono.h"
 #include "dbus_core.h"
 #include "sysinfo.h"
+#include "modem_profile.h"
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -20,7 +21,6 @@
 
 /* ==================== 常量定义 ==================== */
 #define OFONO_MODEM_IFACE "org.ofono.Modem"
-#define DEFAULT_MODEM_PATH "/ril_0"
 #define AT_COMMAND_TIMEOUT 8000 /* 8秒超时 (毫秒) */
 #define MAX_RETRIES 1
 
@@ -34,8 +34,7 @@ static GDBusConnection *g_dbus_conn = NULL;
 static GDBusProxy *g_modem_proxy = NULL;
 static pthread_mutex_t g_at_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char g_last_error[512] = {0};
-static char g_modem_path[64] =
-    DEFAULT_MODEM_PATH; /* 缓存路径，仅用于 proxy 切换检测 */
+static char g_modem_path[64] = "/ril_0";
 
 /* ==================== 内部辅助函数 ==================== */
 
@@ -44,10 +43,13 @@ static char g_modem_path[64] =
  * 切卡后自动返回正确的 /ril_0 或 /ril_1
  */
 static const char *get_current_modem_path(void) {
-  char slot[16], ril_path[32];
+  char slot[16], ril_path[64];
   if (get_current_slot(slot, ril_path) == 0 &&
       strcmp(ril_path, "unknown") != 0) {
     strncpy(g_modem_path, ril_path, sizeof(g_modem_path) - 1);
+    g_modem_path[sizeof(g_modem_path) - 1] = '\0';
+  } else {
+    strncpy(g_modem_path, modem_profile_default_modem_path(), sizeof(g_modem_path) - 1);
     g_modem_path[sizeof(g_modem_path) - 1] = '\0';
   }
   return g_modem_path;
@@ -581,8 +583,6 @@ int ofono_network_get_signal_strength(const char *modem_path, int *strength,
 #define OFONO_CONNECTION_CONTEXT "org.ofono.ConnectionContext"
 #define OFONO_CONNECTION_MANAGER "org.ofono.ConnectionManager"
 #define OFONO_NETWORK_REGISTRATION "org.ofono.NetworkRegistration"
-#define DEFAULT_CONTEXT_PATH "/ril_0/context2"
-#define DEFAULT_MODEM_PATH "/ril_0"
 
 /**
  * 动态查找第一个有效的 internet 类型 context 路径
@@ -612,7 +612,8 @@ static int find_internet_context_path(char *path_buf, size_t buf_size) {
     if (error)
       g_error_free(error);
     /* 回退到默认路径 */
-    strncpy(path_buf, DEFAULT_CONTEXT_PATH, buf_size - 1);
+    strncpy(path_buf, modem_profile_default_context_path(), buf_size - 1);
+    path_buf[buf_size - 1] = '\0';
     return 0;
   }
 
@@ -625,7 +626,8 @@ static int find_internet_context_path(char *path_buf, size_t buf_size) {
     if (error)
       g_error_free(error);
     g_object_unref(proxy);
-    strncpy(path_buf, DEFAULT_CONTEXT_PATH, buf_size - 1);
+    strncpy(path_buf, modem_profile_default_context_path(), buf_size - 1);
+    path_buf[buf_size - 1] = '\0';
     return 0;
   }
 
@@ -692,7 +694,8 @@ static int find_internet_context_path(char *path_buf, size_t buf_size) {
     if (first_internet_path[0] != '\0') {
       strncpy(path_buf, first_internet_path, buf_size - 1);
     } else {
-      strncpy(path_buf, DEFAULT_CONTEXT_PATH, buf_size - 1);
+      strncpy(path_buf, modem_profile_default_context_path(), buf_size - 1);
+      path_buf[buf_size - 1] = '\0';
     }
   }
 
@@ -1901,8 +1904,8 @@ static void subscribe_data_monitor_signals(void) {
          g_context_signal_id);
 
   /* 动态获取当前卡槽路径 */
-  char slot[16], ril_path[32];
-  const char *modem_path = DEFAULT_MODEM_PATH;
+  char slot[16], ril_path[64];
+  const char *modem_path = modem_profile_default_modem_path();
   if (get_current_slot(slot, ril_path) == 0 &&
       strcmp(ril_path, "unknown") != 0) {
     modem_path = ril_path;

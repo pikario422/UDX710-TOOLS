@@ -28,7 +28,11 @@ async function fetchCells() {
       errorMsg.value = res.Error || t('cell.getCellsFailed')
     }
   } catch (err) {
-    errorMsg.value = t('cell.networkError')
+    errorMsg.value = err.message?.includes('409') ? t('cell.getCellsFailed') : t('cell.networkError')
+    if (err.message?.includes('409') && updateInterval.value) {
+      clearInterval(updateInterval.value)
+      updateInterval.value = null
+    }
   } finally {
     loading.value = false
   }
@@ -106,7 +110,7 @@ function getSignalLevel(rsrp) {
 
 onMounted(() => {
   fetchCells()
-  updateInterval.value = setInterval(fetchCells, 5000)
+  updateInterval.value = setInterval(fetchCells, 10000)
 })
 
 onUnmounted(() => {

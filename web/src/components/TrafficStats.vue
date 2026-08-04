@@ -113,7 +113,7 @@ let refreshInterval = null
 onMounted(() => {
   fetchTrafficData()
   fetchConfig()
-  refreshInterval = setInterval(fetchTrafficData, 5000)
+  refreshInterval = setInterval(fetchTrafficData, 10000)
 })
 onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)

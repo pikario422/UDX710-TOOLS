@@ -1,11 +1,12 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { executeAT } from '../composables/useApi'
+import { executeAT, useApi } from '../composables/useApi'
 import { useToast } from '../composables/useToast'
 
 const { t } = useI18n()
 const { success, error: showError } = useToast()
+const api = useApi()
 
 const command = ref('')
 const result = ref('')
@@ -17,6 +18,19 @@ const showImeiModal = ref(false)
 const imeiSlot = ref(0) // 0=卡1, 1=卡2
 const imeiInput = ref('')
 const imeiSubmitting = ref(false)
+const imeiSetTemplate = ref('')
+
+onMounted(async () => {
+  try {
+    const res = await api.get('/api/modem-profile')
+    if (res.ok) {
+      imeiSetTemplate.value = res.data.imei_set || ''
+      quickCommands.value[0].cmd = res.data.imei_query || 'AT+CGSN'
+    }
+  } catch (_) {
+    imeiSetTemplate.value = ''
+  }
+})
 
 // IMEI 输入位数
 const imeiLength = computed(() => imeiInput.value.length)
@@ -47,7 +61,9 @@ async function submitImei() {
   }
   
   imeiSubmitting.value = true
-  const cmd = `AT+SPIMEI=${imeiSlot.value},"${imeiInput.value}"`
+  const cmd = imeiSetTemplate.value
+    .replace('%d', String(imeiSlot.value))
+    .replace('%s', imeiInput.value)
   
   try {
     const res = await executeAT(cmd)
@@ -70,11 +86,11 @@ async function submitImei() {
 }
 
 // 常用AT命令（点击直接发送）
-const quickCommands = [
+const quickCommands = ref([
   { name: 'IMEI', cmd: 'AT+CGSN' },
   { name: 'ICCID', cmd: 'AT+CCID' },
   { name: 'signedRate', cmd: 'AT+CGEQOSRDP' },
-]
+])
 
 async function sendCommand() {
   if (!command.value.trim() || loading.value) return
@@ -137,7 +153,7 @@ function clearHistory() {
       </div>
       
       <!-- 模板命令（点击弹窗修改IMEI） -->
-      <div class="flex flex-wrap gap-2">
+      <div v-if="imeiSetTemplate" class="flex flex-wrap gap-2">
         <button @click="openImeiModal(0)"
           class="px-3 py-1.5 text-xs bg-amber-100 dark:bg-amber-500/20 hover:bg-amber-200 dark:hover:bg-amber-500/30 text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-300 rounded-lg transition-colors border border-amber-200 dark:border-amber-500/30">
           <i class="fas fa-edit mr-1"></i>{{ $t('at.modifySlot1Imei') }}

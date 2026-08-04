@@ -1,300 +1,234 @@
-# 5G MiFi Dashboard(UDX710)
+# UDX710 Tools
 
-[🇨🇳 中文文档](README_CN.md)
+[中文文档](README_CN.md)
 
-A web-based management interface for 5G MiFi devices running on embedded Linux systems (aarch64).
+UDX710 Tools is a web management service for UDX710-based 5G CPE devices. The
+backend is aarch64 C with oFono D-Bus integration; the frontend is Vue 3. The
+server listens on port `6677` by default and serves the built frontend from the
+`dist/` directory beside the executable.
 
-> ⭐ **If you find this project useful, please give it a star!** It took a week of hard work to build this backend. Your support means a lot!
+This version adds a persisted modem profile for vendor-specific AT commands and
+oFono paths, plus native SMS-to-email delivery. Platform behavior and a modem's
+private AT commands are configured separately.
 
-## 📦 Versions
+## Main Features
 
-This project provides two versions for different devices:
+- oFono D-Bus modem control, SIM information, data contexts, SMS, APN, traffic,
+  charging and airplane-mode control.
+- Modem profile import/export for private AT commands, oFono paths, band and
+  cell query strategies.
+- Native SMS email forwarding with a durable queue, asynchronous SMTP worker,
+  retry records, test delivery and logs.
+- SMS webhook forwarding, IPv6 proxy, Rathole, plugin and script management.
+- UDX710 external USB gadget mode management for CDC-NCM, CDC-ECM and RNDIS.
+  This is not the same thing as a modem USB-composition AT command.
 
-| Version | Target Device | Git Branch | Features | Description |
-|:---:|:---:|:---:|:---:|:---|
-| **UDX710 Generic** | UNISOC UDX710 Platform | `main` | ⭐ Basic Features | For most UDX710 devices |
-| **SZ50 Dedicated** | SZ50 MiFi Device | `SZ50` | 🌟 Full Features | Extra: LED Control, Key Listener, WiFi Control, Factory Reset, Client Management |
+## Runtime Requirements
 
-> 💡 **Switch Version**: `git checkout SZ50` for SZ50 version, `git checkout main` for generic version
+The target device needs Linux aarch64, oFono, the system D-Bus socket, the
+`sqlite3` command line utility, and `curl`. For SMS email delivery, `curl -V`
+must list `SMTP` and `SMTPS`.
 
-### 📥 Download
+The application database is `6677.db` in the server working directory. Do not
+edit it while the service is running. Use the web UI or API to change settings.
 
-| Version | Download |
-|:---:|:---:|
-| **UDX710 Generic** | [📥 Download](https://github.com/LeoChen-CoreMind/UDX710-TOOLS/releases/latest) |
-| **SZ50 Dedicated** | [📥 Download](https://github.com/LeoChen-CoreMind/UDX710-TOOLS/releases/latest) |
+## Build And Deploy
 
-### SZ50 Dedicated Version Extra Features
-- 🔆 **LED Control** - Customize LED indicator status
-- 🔘 **Key Listener** - Physical button event response
-- 📶 **WiFi Control** - Full WiFi AP management
-- 🔄 **Factory Reset** - One-click restore to defaults
-- 👥 **Client Management** - Manage connected devices
+### Build the frontend
 
-## ✨ Performance Highlights
-
-| Metric | This Project | Traditional (8080) |
-|--------|-------------|-------------------|
-| **Binary Size** | ~200 KB | ~6 MB |
-| **Memory Usage** (7h runtime) | ~1 MB | Much higher |
-
-Lightweight, efficient, and perfect for resource-constrained embedded devices!
-
-## 📸 Screenshots
-
-| System Monitor | Network Management | Advanced Network |
-|:---:|:---:|:---:|
-| <img src="docs/screenshot1.png" width="250" /> | <img src="docs/screenshot2.png" width="250" /> | <img src="docs/screenshot3.png" width="250" /> |
-
-| SMS Management | Traffic Statistics | Charge Control |
-|:---:|:---:|:---:|
-| <img src="docs/screenshot5.png" width="250" /> | <img src="docs/screenshot6.png" width="250" /> | <img src="docs/screenshot7.png" width="250" /> |
-
-| System Update | AT Debug | Web Terminal |
-|:---:|:---:|:---:|
-| <img src="docs/screenshot8.png" width="250" /> | <img src="docs/screenshot9.png" width="250" /> | <img src="docs/screenshot10.png" width="250" /> |
-
-| USB Mode | System Settings |
-|:---:|:---:|
-| <img src="docs/screenshot11.png" width="250" /> | <img src="docs/screenshot12.png" width="250" /> |
-
-| APN Settings | Plugin Store |
-|:---:|:---:|
-| <img src="docs/screenshot13.png" width="250" /> | <img src="docs/screenshot14.png" width="250" /> |
-
-## Features
-
-### Network Management
-- **Modem Control**: View IMEI, ICCID, carrier info, signal strength
-- **Band Information**: Real-time display of network type, band, ARFCN, PCI, RSRP, RSRQ, SINR
-- **Cell Management**: View and manage cellular connections
-- **Traffic Statistics**: Monitor data usage with vnstat integration
-- **Traffic Control**: Set data limits and automatic network cutoff
-
-### WiFi Management
-- **AP Mode**: Configure WiFi hotspot (SSID, password, channel)
-- **Client Management**: View connected devices, kick clients
-- **DHCP Settings**: Configure IP range and lease time
-
-### System Features
-- **System Monitor**: CPU, memory, temperature monitoring (IMEI/ICCID privacy masking)
-- **SMS Management**: Send and receive SMS messages, Webhook forwarding support
-- **IPv6 Port Forwarding**: Full IPv6 port forwarding service
-  - Map local IPv4 ports to IPv6 addresses
-  - Automatic IPv6 address detection
-  - Webhook notification for IPv6 address changes
-  - Auto-start on boot support
-  - Send logs with response tracking
-- **Intranet Penetration (Rathole)**: Built-in Rathole client for NAT traversal
-  - Multi-service configuration
-  - Auto-generate server config
-  - Real-time connection status
-  - Auto-start on boot support
-- **LED Control**: Manage device LED indicators
-- **Airplane Mode**: Toggle airplane mode
-- **Power Management**: Battery status, charging control
-- **USB Mode Switch**: Switch between CDC-ECM, CDC-NCM, RNDIS USB network modes
-  - Temporary mode: Effective after reboot, reverts on next reboot
-  - Permanent mode: Persists across all reboots
-- **APN Settings**: Custom APN access point configuration
-  - Preset carrier configurations (China Mobile/Unicom/Telecom)
-  - Custom APN, username, password
-  - Multiple authentication protocols (PAP/CHAP)
-- **Plugin Store**: Extensible plugin system
-  - Support custom JS+HTML plugins
-  - Built-in Shell script execution API
-  - Script management (upload/edit/delete)
-  - Plugin import/export functionality
-- **OTA Update**: Over-the-air firmware updates
-- **Factory Reset**: Restore device to default settings
-- **Web Terminal**: Remote shell access
-- **AT Debug**: Direct AT command interface
-
-### UI Features
-- **Dark Mode**: Full dark/light theme support
-- **Responsive Design**: Mobile and desktop optimized
-- **Real-time Updates**: Live data refresh
-- **Chinese Interface**: Native Chinese language support
-
-### Security Features
-- **Backend Authentication**: Password-protected admin interface
-  - Default password: `admin` (recommended to change after first login)
-  - Token-based authentication with auto-expiration
-  - Remember password option
-  - Password change support
-
-## Architecture
-
-```
-├── src/                    # Backend (C)
-│   ├── main.c              # Entry point
-│   ├── mongoose.c/h        # HTTP server (Mongoose)
-│   ├── packed_fs.c         # Embedded static files
-│   ├── handlers/           # HTTP API handlers
-│   │   ├── http_server.c   # Route definitions
-│   │   └── handlers.c      # API implementations
-│   └── system/             # System modules
-│       ├── sysinfo.c       # System information
-│       ├── wifi.c          # WiFi control
-│       ├── sms.c           # SMS management
-│       ├── traffic.c       # Traffic statistics
-│       ├── modem.c         # Modem control
-│       ├── ofono.c         # oFono D-Bus integration
-│       ├── led.c           # LED control
-│       ├── charge.c        # Battery management
-│       ├── airplane.c      # Airplane mode
-│       ├── usb_mode.c      # USB mode switch
-│       ├── plugin.c        # Plugin system
-│       ├── update.c        # OTA updates
-│       ├── factory_reset.c # Factory reset
-│       └── ...
-└── web/                    # Frontend (Vue 3)
-    ├── src/
-    │   ├── App.vue         # Main application
-    │   ├── components/     # Vue components
-    │   ├── composables/    # Vue composables
-    │   └── plugins/        # Plugins (FontAwesome)
-    ├── index.html
-    ├── package.json
-    ├── vite.config.js
-    └── tailwind.config.js
-```
-
-## Requirements
-
-### Backend
-- GCC cross-compiler (aarch64-linux-gnu)
-- GLib 2.0 (D-Bus support)
-- Target: Linux aarch64 (embedded device)
-
-### Frontend
-- Node.js 18+
-- npm or yarn
-
-## Build Instructions
-
-### Frontend
 ```bash
 cd web
-npm install
+npm ci
 npm run build
 ```
 
-### Backend
-```bash
-# Pack frontend into C source
-cd src
-# Generate packed_fs.c from web/dist
+### Cross-compile the backend
 
-# Cross-compile for aarch64
+The repository contains the aarch64 GLib headers and libraries expected by
+`src/Makefile`. Install an aarch64 GNU toolchain, then run:
+
+```bash
+cd src
+make clean
 make
 ```
 
-### Makefile Configuration
-The backend uses cross-compilation targeting aarch64-linux-gnu. Ensure your toolchain is properly configured.
+The output is `src/build/ofono-server`.
 
-## API Endpoints
+### Deployment layout
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/sysinfo` | GET | System information |
-| `/api/wifi/config` | GET/POST | WiFi configuration |
-| `/api/wifi/clients` | GET | Connected clients |
-| `/api/sms/list` | GET | SMS messages |
-| `/api/sms/send` | POST | Send SMS |
-| `/api/traffic/stats` | GET | Traffic statistics |
-| `/api/traffic/limit` | POST | Set traffic limit |
-| `/api/modem/info` | GET | Modem information |
-| `/api/band/current` | GET | Current band info |
-| `/api/led/status` | GET/POST | LED control |
-| `/api/airplane` | GET/POST | Airplane mode |
-| `/api/usb/mode` | GET/POST | USB mode switch (CDC-ECM/CDC-NCM/RNDIS) |
-| `/api/apn` | GET/POST | APN configuration management |
-| `/api/plugins` | GET/POST/DELETE | Plugin management |
-| `/api/scripts` | GET/POST/PUT/DELETE | Script management |
-| `/api/shell` | POST | Execute Shell commands |
-| `/api/ipv6-proxy/config` | GET/POST | IPv6 proxy configuration |
-| `/api/ipv6-proxy/rules` | GET/POST/DELETE | IPv6 forwarding rules |
-| `/api/ipv6-proxy/status` | GET | IPv6 proxy status |
-| `/api/ipv6-proxy/send-logs` | GET | IPv6 send logs |
-| `/api/rathole/config` | GET/POST | Rathole configuration |
-| `/api/rathole/services` | GET/POST/DELETE | Rathole service management |
-| `/api/rathole/status` | GET | Rathole connection status |
-| `/api/rathole/logs` | GET | Rathole logs |
-| `/api/update/check` | GET | Check for updates |
-| `/api/update/install` | POST | Install update |
-| `/api/factory-reset` | POST | Factory reset |
-| `/api/reboot` | POST | Reboot device |
+The executable reads static files from `./dist`, so deploy these files together:
 
-## Dependencies
-
-### Backend Libraries
-- [Mongoose](https://github.com/cesanta/mongoose) - Embedded HTTP server
-- GLib/GIO - D-Bus communication with oFono
-
-### Frontend Libraries
-- Vue 3 - UI framework
-- Vite - Build tool
-- TailwindCSS - Styling
-- FontAwesome - Icons
-
-## 🌐 Remote Management
-
-Built-in lightweight Web Server for browser-based control interface.
-
-**Features**: Device status cards, real-time monitoring, network control & debugging
-
-| Version | Default Access |
-|:---:|:---|
-| UDX710 Generic | `http://DEVICE_IP:6677` |
-| SZ50 Dedicated | `http://DEVICE_IP:80` |
-
-```bash
-# Start server (default port)
-./server
-
-# Start with custom port
-./server 80
+```text
+/home/root/6677/
+  server
+  start.sh
+  dist/
 ```
 
-## 📜 License
+Example `start.sh`:
 
-This project is licensed under **GPLv3** (strong Copyleft):
+```sh
+#!/bin/sh
+set -eu
+cd /home/root/6677
+exec ./server "${PORT:-6677}"
+```
 
-| ✅ Allowed | ⚠️ Required | ❌ Prohibited |
-|:---|:---|:---|
-| Use, modify, distribute | Keep copyright notices | Closed-source commercialization |
-| Distribute modified versions | Open source (when distributing) | Remove copyright info |
-| | Use same license | Change to other licenses |
+```sh
+chmod 755 /home/root/6677/server /home/root/6677/start.sh
+/home/root/6677/start.sh
+```
 
-See [LICENSE](LICENSE)
+Open `http://DEVICE_IP:6677` in a browser.
 
-## 🙏 Acknowledgments
+## Modem Profile
 
-Special thanks to the following contributors:
+The modem profile keeps vendor-specific behavior out of C source. It is stored
+in the SQLite `config` table using keys prefixed with `modem_profile.` and is
+loaded into memory once at startup. Runtime AT execution does not spawn SQLite
+processes for profile lookups.
 
-| Contributor | Contribution |
-|:---:|:---|
-| **等不住** | AT Commands |
-| **黑衣剑士** | USB Mode Switch |
-| **Voodoo** | Glib Build Environment |
-| **1orz** | [project-cpe](https://github.com/1orz/project-cpe) Open Source Project |
-| **LeoChen** | Project Author |
+In **System Settings -> Modem Profile**, choose the FM650 preset, review it,
+then click Save. The page exports a profile as JSON and imports it through
+`POST /api/modem-profile`.
 
-Thanks to all community members for your support and feedback!
+### Field Reference
 
-## ☕ Support the Project
+| Field | Purpose |
+| --- | --- |
+| `default_modem_path` | Fallback oFono modem path. |
+| `slot1_modem_path`, `slot2_modem_path` | oFono paths matched to SIM slots. |
+| `default_context_path` | Fallback oFono data-context path. |
+| `sms_cnmi_enabled`, `sms_cnmi_disabled` | Commands sent by the SMS receive-fix toggle. |
+| `advanced_strategy` | `bitmask_matrix` for SPRD matrix output; `list_csv` for list/CSV output. |
+| `band_set_lte`, `band_set_nr` | Band-set command templates. |
+| `cell_*` | Cell query, lock and CSV column-mapping fields. |
+| `imei_query`, `imei_set` | IMEI command templates. Empty `imei_set` disables IMEI writing. |
 
-This project is completely open source and free. If you like this project, you can buy me a coffee~
+Template validation rules:
 
-| Alipay | WeChat | QQ Group |
-|:---:|:---:|:---:|
-| <img src="docs/alipay.png" width="200" /> | <img src="docs/wechat.png" width="200" /> | <img src="docs/qq_group.png" width="200" /> |
+- `bitmask_matrix`: LTE and NR band templates need two `%d`; `cell_lock`
+  needs three `%s`.
+- `list_csv`: LTE and NR band templates need one `%s`; LTE and NR cell-lock
+  templates need two `%s` each.
+- Other command fields must start with `AT` and cannot contain a newline or a
+  `%` placeholder.
 
-## 💬 Community
+### FM650 Profile Example
 
-Welcome to join the discussion!
+This matches the current FM650 preset. It is a starting point, not a replacement
+for device testing. Capture real `AT+GTCCINFO?` output before relying on the CSV
+column numbers.
 
-- **QQ Group**: 1029148488
+```json
+{
+  "name": "Fibocom FM650 / oFono",
+  "default_modem_path": "/ril_0",
+  "slot1_modem_path": "/ril_0",
+  "slot2_modem_path": "/ril_1",
+  "default_context_path": "/ril_0/context2",
+  "advanced_network_enabled": true,
+  "advanced_strategy": "list_csv",
+  "lte_band_offset": 100,
+  "nr_band_prefix": "50",
+  "cell_lte_rat": 4,
+  "cell_nr_rat": 9,
+  "cell_serving_value": 1,
+  "cell_arfcn_column": 6,
+  "cell_pci_column": 7,
+  "cell_band_column": 8,
+  "cell_sinr_column": 10,
+  "cell_rsrp_column": 12,
+  "cell_rsrq_column": 13,
+  "sms_cnmi_enabled": "AT+CNMI=2,1,0,0,0",
+  "sms_cnmi_disabled": "AT+CNMI=2,0,0,0,0",
+  "band_query_lte": "AT+GTACT?",
+  "band_query_nr": "AT+GTACT?",
+  "radio_off": "AT+CFUN=0",
+  "radio_on": "AT+CFUN=1",
+  "pdp_reactivate": "AT+CGACT=1,1",
+  "band_reset_lte": "AT+GTACT=2,3,0",
+  "band_reset_nr": "AT+GTACT=14,6,0",
+  "band_set_lte": "AT+GTACT=2,3,%s",
+  "band_set_nr": "AT+GTACT=14,6,%s",
+  "cell_lte_serving": "AT+GTCCINFO?",
+  "cell_lte_neighbor": "AT+GTCCINFO?",
+  "cell_nr_serving": "AT+GTCCINFO?",
+  "cell_nr_neighbor": "AT+GTCCINFO?",
+  "cell_unlock_lte": "AT+GTCELLLOCK=0",
+  "cell_unlock_nr": "AT+GTCELLLOCK=0",
+  "cell_lock": "",
+  "cell_lock_lte": "AT+GTCELLLOCK=2,0,0,%s,%s",
+  "cell_lock_nr": "AT+GTCELLLOCK=2,1,0,%s,%s",
+  "imei_query": "AT+CGSN",
+  "imei_set": ""
+}
+```
 
-Welcome to submit Issues / Pull Requests to improve the project 💡
+Before enabling FM650 advanced network operations, retain these target-device
+responses:
+
+```text
+AT+GTACT?
+AT+GTACT=?
+AT+GTCCINFO?
+AT+GTCELLLOCK=?
+```
+
+`AT+GTUSBMODE` is intentionally not part of the UDX710 USB gadget setting. It
+changes the FM650's own USB composition, uses profiles such as `34` through
+`41`, and takes effect only after module reset or power cycle.
+
+## SMS Email Forwarding
+
+Configure this in **SMS -> Forwarding -> SMS Email Forwarding**. Configuration
+is stored in SQLite, not in a plugin file. The password is not returned by the
+read API; leaving the password blank when saving preserves the existing one.
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| SMTP server | `smtp.qq.com` | Host name only, without `https://`. |
+| Port | `465` | 465 uses implicit TLS. Other ports use STARTTLS. |
+| Login account | `name@qq.com` | SMTP account. |
+| Password | SMTP authorization code | QQ and 163 normally require an authorization code. |
+| From address | `name@qq.com` | Usually the SMTP account address. |
+| To address | `ops@example.com` | One recipient per current configuration. |
+
+When enabled, an incoming SMS is saved first and then added to
+`sms_email_queue`. One worker sends it with `curl`; failed deliveries retry up
+to five times with increasing delays. The log view reads `sms_email_log`.
+Use **Send Test Email** after saving the configuration.
+
+## API Summary
+
+All APIs except login/status require the configured Bearer token.
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/api/modem-profile` | GET | Read the current modem profile. |
+| `/api/modem-profile` | POST | Validate, persist and activate a profile. |
+| `/api/modem-profile/reset` | POST | Restore the UDX710 SPRD default profile. |
+| `/api/sms/email` | GET/POST | Read or save SMTP forwarding configuration. |
+| `/api/sms/email/test` | POST | Queue a test email. |
+| `/api/sms/email/logs?lines=10` | GET | Read recent delivery logs. |
+| `/api/sms/webhook` | GET/POST | Configure SMS webhook forwarding. |
+| `/api/usb/mode` | GET/POST | UDX710 external USB gadget configuration. |
+
+## GitHub Actions
+
+`.github/workflows/build.yml` builds the frontend and aarch64 backend on every
+push, pull request and manual dispatch. It uploads a compressed deployment
+package plus a SHA-256 checksum as an Actions artifact.
+
+## Verification Notes
+
+- `npm run build` validates the Vue application.
+- The backend must be built with an aarch64 toolchain because it links the
+  target GLib/GIO libraries included in this repository.
+- Test the oFono paths, private AT response formats and `curl` SMTP support on
+  each modem/device combination before production use.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).

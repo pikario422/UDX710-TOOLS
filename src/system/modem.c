@@ -10,6 +10,7 @@
 #include "modem.h"
 #include "sysinfo.h"
 #include "ofono.h"
+#include "modem_profile.h"
 
 /* 有效的网络模式 */
 static const char *valid_modes[] = {"lte_only", "nr_5g_only", "nr_5g_lte_auto", "nsa_only", NULL};
@@ -45,7 +46,7 @@ int set_network_mode(const char *mode) {
 }
 
 int set_network_mode_for_slot(const char *mode, const char *slot) {
-    char ril_path[32];
+    char ril_path[64];
     int mode_code;
 
     if (!is_valid_network_mode(mode)) {
@@ -63,9 +64,11 @@ int set_network_mode_for_slot(const char *mode, const char *slot) {
         }
     } else {
         if (strcmp(slot, "slot1") == 0) {
-            strcpy(ril_path, "/ril_0");
+            strncpy(ril_path, modem_profile_slot_modem_path(1), sizeof(ril_path) - 1);
+            ril_path[sizeof(ril_path) - 1] = '\0';
         } else if (strcmp(slot, "slot2") == 0) {
-            strcpy(ril_path, "/ril_1");
+            strncpy(ril_path, modem_profile_slot_modem_path(2), sizeof(ril_path) - 1);
+            ril_path[sizeof(ril_path) - 1] = '\0';
         } else {
             return -1;
         }
@@ -81,20 +84,22 @@ int set_network_mode_for_slot(const char *mode, const char *slot) {
 extern int ofono_is_initialized(void);
 
 int switch_slot(const char *slot) {
-    char target_ril[16], other_ril[16];
-    char new_slot[16], new_ril[32];
+    char target_ril[64], other_ril[64];
+    char new_slot[16], new_ril[64];
 
     if (!ofono_is_initialized() || !is_valid_slot(slot)) {
         return -1;
     }
 
     if (strcmp(slot, "slot1") == 0) {
-        strcpy(target_ril, "/ril_0");
-        strcpy(other_ril, "/ril_1");
+        strncpy(target_ril, modem_profile_slot_modem_path(1), sizeof(target_ril) - 1);
+        strncpy(other_ril, modem_profile_slot_modem_path(2), sizeof(other_ril) - 1);
     } else {
-        strcpy(target_ril, "/ril_1");
-        strcpy(other_ril, "/ril_0");
+        strncpy(target_ril, modem_profile_slot_modem_path(2), sizeof(target_ril) - 1);
+        strncpy(other_ril, modem_profile_slot_modem_path(1), sizeof(other_ril) - 1);
     }
+    target_ril[sizeof(target_ril) - 1] = '\0';
+    other_ril[sizeof(other_ril) - 1] = '\0';
 
     /* 步骤1: 把当前卡槽设置为 LTE only (mode=5) */
     ofono_network_set_mode_sync(other_ril, MODE_LTE_ONLY, OFONO_TIMEOUT_MS);

@@ -11,6 +11,9 @@
 #include "sms.h"
 #include "database.h"
 #include "exec_utils.h"
+#include "modem_profile.h"
+#include "sms_email.h"
+#include "sysinfo.h"
 
 /* 短信模块专用互斥锁 */
 static pthread_mutex_t g_sms_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -245,6 +248,9 @@ static void on_incoming_message(GDBusConnection *conn, const gchar *sender_name,
     time_t now = time(NULL);
     if (save_sms_to_db(sender, content, now) == 0) {
         printf("[SMS] 短信已保存到数据库\n");
+
+        /* 邮件投递仅入队；网络 I/O 由独立 worker 处理。 */
+        sms_email_enqueue(sender, content, now);
         
         /* 发送Webhook通知 */
         if (g_webhook_config.enabled && strlen(g_webhook_config.url) > 0) {
@@ -403,18 +409,26 @@ int sms_init(const char *db_path) {
         printf("[SMS] 数据库初始化失败\n");
         return -1;
     }
+
+    /* Load once after SQLite is ready; runtime lookups use the in-memory copy. */
+    modem_profile_reload();
     
     printf("[SMS] 数据库路径: %s\n", db_get_path());
     
     /* 加载配置 */
     load_sms_config();
     sms_get_webhook_config(&g_webhook_config);
+    if (sms_email_init() != 0) {
+        printf("[SMS] 邮件转发服务初始化失败\n");
+    }
     
     /* 连接D-Bus */
     g_sms_dbus_conn = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
     if (!g_sms_dbus_conn) {
         printf("[SMS] D-Bus连接失败: %s\n", error ? error->message : "未知错误");
         if (error) g_error_free(error);
+        /* The email worker has already started after the database was opened. */
+        sms_email_deinit();
         return -1;
     }
     
@@ -448,6 +462,8 @@ int sms_init(const char *db_path) {
 /* 关闭短信模块 */
 void sms_deinit(void) {
     if (!g_sms_initialized) return;
+
+    sms_email_deinit();
     
     /* 取消信号订阅 */
     unsubscribe_sms_signal();
@@ -473,6 +489,7 @@ void sms_deinit(void) {
 int sms_send(const char *recipient, const char *content, char *result_path, size_t path_size) {
     GError *error = NULL;
     GVariant *result = NULL;
+    char slot[16], modem_path[64];
     
     if (!recipient || !content || strlen(recipient) == 0 || strlen(content) == 0) {
         printf("发送短信参数无效\n");
@@ -485,12 +502,17 @@ int sms_send(const char *recipient, const char *content, char *result_path, size
     }
     
     printf("[SMS] 发送短信到 %s: %s\n", recipient, content);
+
+    if (get_current_slot(slot, modem_path) != 0 || strcmp(modem_path, "unknown") == 0) {
+        strncpy(modem_path, modem_profile_default_modem_path(), sizeof(modem_path) - 1);
+        modem_path[sizeof(modem_path) - 1] = '\0';
+    }
     
     /* 调用 org.ofono.MessageManager.SendMessage */
     result = g_dbus_connection_call_sync(
         g_sms_dbus_conn,
         "org.ofono",
-        "/ril_0",
+        modem_path,
         "org.ofono.MessageManager",
         "SendMessage",
         g_variant_new("(ss)", recipient, content),
@@ -806,7 +828,9 @@ int sms_set_fix_enabled(int enabled) {
     char *at_result = NULL;
     
     /* 发送AT命令 */
-    const char *at_cmd = enabled ? "AT+CNMI=3,2,0,1,0" : "AT+CNMI=3,1,0,1,0";
+    const char *at_cmd = enabled ?
+        modem_profile_command(MODEM_CMD_SMS_CNMI_ENABLED) :
+        modem_profile_command(MODEM_CMD_SMS_CNMI_DISABLED);
     printf("[SMS] 发送AT命令: %s\n", at_cmd);
     
     if (execute_at(at_cmd, &at_result) != 0) {
@@ -840,9 +864,10 @@ static void apply_sms_fix_on_init(void) {
     
     if (enabled) {
         char *at_result = NULL;
-        printf("[SMS] 开机应用短信修复AT命令: AT+CNMI=3,2,0,1,0\n");
+        const char *at_cmd = modem_profile_command(MODEM_CMD_SMS_CNMI_ENABLED);
+        printf("[SMS] 开机应用短信修复AT命令: %s\n", at_cmd);
         
-        if (execute_at("AT+CNMI=3,2,0,1,0", &at_result) == 0) {
+        if (execute_at(at_cmd, &at_result) == 0) {
             printf("[SMS] AT命令执行成功\n");
         } else {
             printf("[SMS] AT命令执行失败\n");

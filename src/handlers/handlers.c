@@ -11,6 +11,7 @@
 #include "http_utils.h"
 #include "json_builder.h"
 #include "modem.h"
+#include "modem_profile.h"
 #include "mongoose.h"
 #include "ofono.h"
 #include "sysinfo.h"
@@ -387,6 +388,10 @@ static int is_5g_network(void) {
 void handle_get_current_band(struct mg_connection *c,
                              struct mg_http_message *hm) {
   HTTP_CHECK_GET(c, hm);
+  if (!modem_profile_advanced_network_enabled()) {
+    HTTP_ERROR(c, 409, "Advanced network commands are disabled by the modem profile");
+    return;
+  }
 
   char net_type[32] = "N/A";
   char band[32] = "N/A";
@@ -400,7 +405,7 @@ void handle_get_current_band(struct mg_connection *c,
 
   if (is_5g) {
     /* 5G 网络: AT+SPENGMD=0,14,1 */
-    if (execute_at("AT+SPENGMD=0,14,1", &result) == 0 && result &&
+    if (execute_at(modem_profile_command(MODEM_CMD_CELL_NR_SERVING), &result) == 0 && result &&
         strlen(result) > 100) {
       char data[64][16][32] = {{{0}}};
       int rows = parse_cell_to_vec(result, data);
@@ -436,7 +441,7 @@ void handle_get_current_band(struct mg_connection *c,
     }
   } else {
     /* 4G 网络: AT+SPENGMD=0,6,0 */
-    if (execute_at("AT+SPENGMD=0,6,0", &result) == 0 && result &&
+    if (execute_at(modem_profile_command(MODEM_CMD_CELL_LTE_SERVING), &result) == 0 && result &&
         strlen(result) > 100) {
       char data[64][16][32] = {{{0}}};
       int rows = parse_cell_to_vec(result, data);
@@ -492,6 +497,7 @@ void handle_get_current_band(struct mg_connection *c,
 
 /* ==================== 短信 API ==================== */
 #include "sms.h"
+#include "sms_email.h"
 
 /* GET /api/sms - 获取短信列表 */
 void handle_sms_list(struct mg_connection *c, struct mg_http_message *hm) {
@@ -803,6 +809,309 @@ void handle_sms_fix_set(struct mg_connection *c, struct mg_http_message *hm) {
   } else {
     HTTP_ERROR(c, 500, "设置失败，AT命令执行错误");
   }
+}
+
+static void add_modem_profile_json(JsonBuilder *j, const ModemProfile *profile) {
+  json_add_str(j, "name", profile->name);
+  json_add_str(j, "default_modem_path", profile->default_modem_path);
+  json_add_str(j, "slot1_modem_path", profile->slot1_modem_path);
+  json_add_str(j, "slot2_modem_path", profile->slot2_modem_path);
+  json_add_str(j, "default_context_path", profile->default_context_path);
+  json_add_bool(j, "advanced_network_enabled", profile->advanced_network_enabled);
+  json_add_str(j, "advanced_strategy", profile->advanced_strategy);
+  json_add_int(j, "lte_band_offset", profile->lte_band_offset);
+  json_add_str(j, "nr_band_prefix", profile->nr_band_prefix);
+  json_add_int(j, "cell_lte_rat", profile->cell_lte_rat);
+  json_add_int(j, "cell_nr_rat", profile->cell_nr_rat);
+  json_add_int(j, "cell_serving_value", profile->cell_serving_value);
+  json_add_int(j, "cell_arfcn_column", profile->cell_arfcn_column);
+  json_add_int(j, "cell_pci_column", profile->cell_pci_column);
+  json_add_int(j, "cell_band_column", profile->cell_band_column);
+  json_add_int(j, "cell_sinr_column", profile->cell_sinr_column);
+  json_add_int(j, "cell_rsrp_column", profile->cell_rsrp_column);
+  json_add_int(j, "cell_rsrq_column", profile->cell_rsrq_column);
+  json_add_str(j, "sms_cnmi_enabled", profile->sms_cnmi_enabled);
+  json_add_str(j, "sms_cnmi_disabled", profile->sms_cnmi_disabled);
+  json_add_str(j, "band_query_lte", profile->band_query_lte);
+  json_add_str(j, "band_query_nr", profile->band_query_nr);
+  json_add_str(j, "radio_off", profile->radio_off);
+  json_add_str(j, "radio_on", profile->radio_on);
+  json_add_str(j, "pdp_reactivate", profile->pdp_reactivate);
+  json_add_str(j, "band_reset_lte", profile->band_reset_lte);
+  json_add_str(j, "band_reset_nr", profile->band_reset_nr);
+  json_add_str(j, "band_set_lte", profile->band_set_lte);
+  json_add_str(j, "band_set_nr", profile->band_set_nr);
+  json_add_str(j, "cell_lte_serving", profile->cell_lte_serving);
+  json_add_str(j, "cell_lte_neighbor", profile->cell_lte_neighbor);
+  json_add_str(j, "cell_nr_serving", profile->cell_nr_serving);
+  json_add_str(j, "cell_nr_neighbor", profile->cell_nr_neighbor);
+  json_add_str(j, "cell_unlock_lte", profile->cell_unlock_lte);
+  json_add_str(j, "cell_unlock_nr", profile->cell_unlock_nr);
+  json_add_str(j, "cell_lock", profile->cell_lock);
+  json_add_str(j, "cell_lock_lte", profile->cell_lock_lte);
+  json_add_str(j, "cell_lock_nr", profile->cell_lock_nr);
+  json_add_str(j, "imei_query", profile->imei_query);
+  json_add_str(j, "imei_set", profile->imei_set);
+}
+
+/* GET /api/sms/email - 获取邮件转发配置（密码不会返回给前端） */
+void handle_sms_email_get(struct mg_connection *c, struct mg_http_message *hm) {
+  HTTP_CHECK_GET(c, hm);
+  SmsEmailConfig config;
+  if (sms_email_get_config(&config) != 0) {
+    HTTP_ERROR(c, 500, "获取邮件配置失败");
+    return;
+  }
+  JsonBuilder *j = json_new();
+  json_obj_open(j);
+  json_add_bool(j, "enabled", config.enabled);
+  json_add_str(j, "server", config.smtp_server);
+  json_add_int(j, "port", config.smtp_port);
+  json_add_str(j, "username", config.smtp_user);
+  json_add_str(j, "from_addr", config.from_addr);
+  json_add_str(j, "to_addr", config.to_addr);
+  json_add_bool(j, "password_set", config.password_set);
+  json_obj_close(j);
+  HTTP_OK_FREE(c, json_finish(j));
+}
+
+/* POST /api/sms/email - 保存邮件转发配置 */
+void handle_sms_email_save(struct mg_connection *c, struct mg_http_message *hm) {
+  HTTP_CHECK_POST(c, hm);
+  SmsEmailConfig config = {0};
+  bool enabled = false;
+  double port = 465;
+  mg_json_get_bool(hm->body, "$.enabled", &enabled);
+  mg_json_get_num(hm->body, "$.port", &port);
+  config.enabled = enabled ? 1 : 0;
+  config.smtp_port = (int)port;
+  mg_json_get_str_to_buf(hm->body, "$.server", config.smtp_server,
+                         sizeof(config.smtp_server));
+  mg_json_get_str_to_buf(hm->body, "$.username", config.smtp_user,
+                         sizeof(config.smtp_user));
+  mg_json_get_str_to_buf(hm->body, "$.password", config.smtp_password,
+                         sizeof(config.smtp_password));
+  mg_json_get_str_to_buf(hm->body, "$.from_addr", config.from_addr,
+                         sizeof(config.from_addr));
+  mg_json_get_str_to_buf(hm->body, "$.to_addr", config.to_addr,
+                         sizeof(config.to_addr));
+  if (sms_email_save_config(&config) == 0) {
+    HTTP_SUCCESS(c, "邮件转发配置已保存");
+  } else {
+    HTTP_ERROR(c, 400, "邮件配置不完整或格式无效");
+  }
+}
+
+/* POST /api/sms/email/test - 将测试邮件加入原生投递队列 */
+void handle_sms_email_test(struct mg_connection *c, struct mg_http_message *hm) {
+  HTTP_CHECK_POST(c, hm);
+  if (sms_email_test() == 0) {
+    HTTP_SUCCESS(c, "测试邮件已加入投递队列");
+  } else {
+    HTTP_ERROR(c, 400, "请先保存完整并启用的邮件配置");
+  }
+}
+
+void handle_sms_email_logs(struct mg_connection *c, struct mg_http_message *hm) {
+  HTTP_CHECK_GET(c, hm);
+  int max_lines = 20;
+  char lines_param[16];
+  if (mg_http_get_var(&hm->query, "lines", lines_param, sizeof(lines_param)) > 0) {
+    max_lines = atoi(lines_param);
+  }
+  char *logs_json = malloc(128 * 1024);
+  if (!logs_json) {
+    HTTP_ERROR(c, 500, "内存分配失败");
+    return;
+  }
+  if (sms_email_get_logs(logs_json, 128 * 1024, max_lines) != 0) {
+    free(logs_json);
+    HTTP_ERROR(c, 500, "获取邮件日志失败");
+    return;
+  }
+  JsonBuilder *j = json_new();
+  json_obj_open(j);
+  json_add_raw(j, "data", logs_json);
+  json_obj_close(j);
+  HTTP_OK_FREE(c, json_finish(j));
+  free(logs_json);
+}
+
+static int modem_profile_command_is_valid(const char *command) {
+  if (!command || strncmp(command, "AT", 2) != 0) return 0;
+  return strchr(command, '\r') == NULL && strchr(command, '\n') == NULL &&
+         strchr(command, '%') == NULL;
+}
+
+static int modem_profile_template_is_valid(const char *command,
+                                           char placeholder,
+                                           int expected_count) {
+  int count = 0;
+  const char *p = command;
+  if (!command || strncmp(command, "AT", 2) != 0) return 0;
+  while (*p) {
+    if (*p == '\r' || *p == '\n') return 0;
+    if (*p == '%') {
+      if (p[1] != placeholder) return 0;
+      count++;
+      p++;
+    }
+    p++;
+  }
+  return count == expected_count;
+}
+
+static int modem_profile_imei_set_is_valid(const char *command) {
+  int d_count = 0, s_count = 0;
+  const char *p = command;
+  if (!command || !command[0]) return 1;
+  if (strncmp(command, "AT", 2) != 0) return 0;
+  while (*p) {
+    if (*p == '\r' || *p == '\n') return 0;
+    if (*p == '%') {
+      if (p[1] == 'd') d_count++;
+      else if (p[1] == 's') s_count++;
+      else return 0;
+      p++;
+    }
+    p++;
+  }
+  return d_count == 1 && s_count == 1;
+}
+
+static int modem_profile_is_valid(const ModemProfile *profile) {
+  const char *commands[] = {
+      profile->sms_cnmi_enabled, profile->sms_cnmi_disabled,
+      profile->band_query_lte, profile->band_query_nr, profile->radio_off,
+      profile->radio_on, profile->pdp_reactivate, profile->band_reset_lte,
+      profile->band_reset_nr, profile->cell_lte_serving, profile->cell_lte_neighbor,
+      profile->cell_nr_serving, profile->cell_nr_neighbor,
+      profile->cell_unlock_lte, profile->cell_unlock_nr};
+  size_t i;
+
+  if (!profile->name[0] || strchr(profile->name, '\r') || strchr(profile->name, '\n') ||
+      profile->default_modem_path[0] != '/' ||
+      profile->slot1_modem_path[0] != '/' || profile->slot2_modem_path[0] != '/' ||
+      profile->default_context_path[0] != '/' ||
+      strchr(profile->default_modem_path, '\r') || strchr(profile->default_modem_path, '\n') ||
+      strchr(profile->slot1_modem_path, '\r') || strchr(profile->slot1_modem_path, '\n') ||
+      strchr(profile->slot2_modem_path, '\r') || strchr(profile->slot2_modem_path, '\n') ||
+      strchr(profile->default_context_path, '\r') || strchr(profile->default_context_path, '\n')) return 0;
+  for (i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+    if (!modem_profile_command_is_valid(commands[i])) return 0;
+  }
+  if (strcmp(profile->advanced_strategy, "bitmask_matrix") == 0) {
+    return modem_profile_template_is_valid(profile->band_set_lte, 'd', 2) &&
+           modem_profile_template_is_valid(profile->band_set_nr, 'd', 2) &&
+           modem_profile_template_is_valid(profile->cell_lock, 's', 3) &&
+           modem_profile_command_is_valid(profile->imei_query) &&
+           modem_profile_imei_set_is_valid(profile->imei_set);
+  }
+  if (strcmp(profile->advanced_strategy, "list_csv") == 0) {
+    return modem_profile_template_is_valid(profile->band_set_lte, 's', 1) &&
+           modem_profile_template_is_valid(profile->band_set_nr, 's', 1) &&
+           modem_profile_template_is_valid(profile->cell_lock_lte, 's', 2) &&
+           modem_profile_template_is_valid(profile->cell_lock_nr, 's', 2) &&
+           modem_profile_command_is_valid(profile->imei_query) &&
+           modem_profile_imei_set_is_valid(profile->imei_set);
+  }
+  return 0;
+}
+
+void handle_modem_profile_get(struct mg_connection *c,
+                              struct mg_http_message *hm) {
+  ModemProfile profile;
+  HTTP_CHECK_GET(c, hm);
+  modem_profile_get(&profile);
+  JsonBuilder *j = json_new();
+  json_obj_open(j);
+  add_modem_profile_json(j, &profile);
+  json_obj_close(j);
+  HTTP_OK_FREE(c, json_finish(j));
+}
+
+void handle_modem_profile_save(struct mg_connection *c,
+                               struct mg_http_message *hm) {
+  ModemProfile profile;
+  bool enabled = false;
+  HTTP_CHECK_POST(c, hm);
+  modem_profile_get(&profile);
+
+  mg_json_get_str_to_buf(hm->body, "$.name", profile.name, sizeof(profile.name));
+  mg_json_get_str_to_buf(hm->body, "$.default_modem_path", profile.default_modem_path, sizeof(profile.default_modem_path));
+  mg_json_get_str_to_buf(hm->body, "$.slot1_modem_path", profile.slot1_modem_path, sizeof(profile.slot1_modem_path));
+  mg_json_get_str_to_buf(hm->body, "$.slot2_modem_path", profile.slot2_modem_path, sizeof(profile.slot2_modem_path));
+  mg_json_get_str_to_buf(hm->body, "$.default_context_path", profile.default_context_path, sizeof(profile.default_context_path));
+  mg_json_get_str_to_buf(hm->body, "$.advanced_strategy", profile.advanced_strategy, sizeof(profile.advanced_strategy));
+  mg_json_get_str_to_buf(hm->body, "$.nr_band_prefix", profile.nr_band_prefix, sizeof(profile.nr_band_prefix));
+  mg_json_get_str_to_buf(hm->body, "$.sms_cnmi_enabled", profile.sms_cnmi_enabled, sizeof(profile.sms_cnmi_enabled));
+  mg_json_get_str_to_buf(hm->body, "$.sms_cnmi_disabled", profile.sms_cnmi_disabled, sizeof(profile.sms_cnmi_disabled));
+  mg_json_get_str_to_buf(hm->body, "$.band_query_lte", profile.band_query_lte, sizeof(profile.band_query_lte));
+  mg_json_get_str_to_buf(hm->body, "$.band_query_nr", profile.band_query_nr, sizeof(profile.band_query_nr));
+  mg_json_get_str_to_buf(hm->body, "$.radio_off", profile.radio_off, sizeof(profile.radio_off));
+  mg_json_get_str_to_buf(hm->body, "$.radio_on", profile.radio_on, sizeof(profile.radio_on));
+  mg_json_get_str_to_buf(hm->body, "$.pdp_reactivate", profile.pdp_reactivate, sizeof(profile.pdp_reactivate));
+  mg_json_get_str_to_buf(hm->body, "$.band_reset_lte", profile.band_reset_lte, sizeof(profile.band_reset_lte));
+  mg_json_get_str_to_buf(hm->body, "$.band_reset_nr", profile.band_reset_nr, sizeof(profile.band_reset_nr));
+  mg_json_get_str_to_buf(hm->body, "$.band_set_lte", profile.band_set_lte, sizeof(profile.band_set_lte));
+  mg_json_get_str_to_buf(hm->body, "$.band_set_nr", profile.band_set_nr, sizeof(profile.band_set_nr));
+  mg_json_get_str_to_buf(hm->body, "$.cell_lte_serving", profile.cell_lte_serving, sizeof(profile.cell_lte_serving));
+  mg_json_get_str_to_buf(hm->body, "$.cell_lte_neighbor", profile.cell_lte_neighbor, sizeof(profile.cell_lte_neighbor));
+  mg_json_get_str_to_buf(hm->body, "$.cell_nr_serving", profile.cell_nr_serving, sizeof(profile.cell_nr_serving));
+  mg_json_get_str_to_buf(hm->body, "$.cell_nr_neighbor", profile.cell_nr_neighbor, sizeof(profile.cell_nr_neighbor));
+  mg_json_get_str_to_buf(hm->body, "$.cell_unlock_lte", profile.cell_unlock_lte, sizeof(profile.cell_unlock_lte));
+  mg_json_get_str_to_buf(hm->body, "$.cell_unlock_nr", profile.cell_unlock_nr, sizeof(profile.cell_unlock_nr));
+  mg_json_get_str_to_buf(hm->body, "$.cell_lock", profile.cell_lock, sizeof(profile.cell_lock));
+  mg_json_get_str_to_buf(hm->body, "$.cell_lock_lte", profile.cell_lock_lte, sizeof(profile.cell_lock_lte));
+  mg_json_get_str_to_buf(hm->body, "$.cell_lock_nr", profile.cell_lock_nr, sizeof(profile.cell_lock_nr));
+  mg_json_get_str_to_buf(hm->body, "$.imei_query", profile.imei_query, sizeof(profile.imei_query));
+  mg_json_get_str_to_buf(hm->body, "$.imei_set", profile.imei_set, sizeof(profile.imei_set));
+  if (mg_json_get_bool(hm->body, "$.advanced_network_enabled", &enabled)) {
+    profile.advanced_network_enabled = enabled ? 1 : 0;
+  }
+  profile.lte_band_offset = (int) mg_json_get_long(hm->body, "$.lte_band_offset", profile.lte_band_offset);
+  profile.cell_lte_rat = (int) mg_json_get_long(hm->body, "$.cell_lte_rat", profile.cell_lte_rat);
+  profile.cell_nr_rat = (int) mg_json_get_long(hm->body, "$.cell_nr_rat", profile.cell_nr_rat);
+  profile.cell_serving_value = (int) mg_json_get_long(hm->body, "$.cell_serving_value", profile.cell_serving_value);
+  profile.cell_arfcn_column = (int) mg_json_get_long(hm->body, "$.cell_arfcn_column", profile.cell_arfcn_column);
+  profile.cell_pci_column = (int) mg_json_get_long(hm->body, "$.cell_pci_column", profile.cell_pci_column);
+  profile.cell_band_column = (int) mg_json_get_long(hm->body, "$.cell_band_column", profile.cell_band_column);
+  profile.cell_sinr_column = (int) mg_json_get_long(hm->body, "$.cell_sinr_column", profile.cell_sinr_column);
+  profile.cell_rsrp_column = (int) mg_json_get_long(hm->body, "$.cell_rsrp_column", profile.cell_rsrp_column);
+  profile.cell_rsrq_column = (int) mg_json_get_long(hm->body, "$.cell_rsrq_column", profile.cell_rsrq_column);
+
+  if (!modem_profile_is_valid(&profile)) {
+    HTTP_ERROR(c, 400, "Invalid module profile");
+    return;
+  }
+  if (modem_profile_save(&profile) != 0) {
+    HTTP_ERROR(c, 500, "Failed to save module profile");
+    return;
+  }
+
+  JsonBuilder *j = json_new();
+  json_obj_open(j);
+  json_add_str(j, "status", "success");
+  add_modem_profile_json(j, &profile);
+  json_obj_close(j);
+  HTTP_OK_FREE(c, json_finish(j));
+}
+
+void handle_modem_profile_reset(struct mg_connection *c,
+                                struct mg_http_message *hm) {
+  ModemProfile profile;
+  HTTP_CHECK_POST(c, hm);
+  if (modem_profile_reset() != 0) {
+    HTTP_ERROR(c, 500, "Failed to restore module profile");
+    return;
+  }
+  modem_profile_get(&profile);
+  JsonBuilder *j = json_new();
+  json_obj_open(j);
+  json_add_str(j, "status", "success");
+  add_modem_profile_json(j, &profile);
+  json_obj_close(j);
+  HTTP_OK_FREE(c, json_finish(j));
 }
 
 /* ==================== OTA更新 API ==================== */

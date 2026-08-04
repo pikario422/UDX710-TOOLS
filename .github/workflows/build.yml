@@ -2,61 +2,71 @@ name: Build UDX710 Tools
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build-arm:
-    runs-on: ubuntu-latest
+  build:
+    name: Build aarch64 deployment package
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout code
+      - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-          sudo apt-get update
-          sudo apt-get install -y nodejs
-
-      - name: Cache cross compiler (aarch64)
-        uses: actions/cache@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ${{ github.workspace }}/tools/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu
-          key: gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Configure cross compiler (aarch64)
+      - name: Install aarch64 toolchain
         run: |
-          mkdir -p $GITHUB_WORKSPACE/tools
-          if [ ! -d "$GITHUB_WORKSPACE/tools/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu" ]; then
-            wget https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
-            tar xf gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz -C $GITHUB_WORKSPACE/tools
-          fi
-          echo "PATH=$PATH:$GITHUB_WORKSPACE/tools/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu file
 
-      - name: build web
+      - name: Build frontend
+        working-directory: web
         run: |
-          cd web
-          npm install && npm run build
+          npm ci
+          npm run build
 
-      - name: build server
+      - name: Build backend
+        working-directory: src
         run: |
-          cd src
+          make clean
           make
+          file build/ofono-server
+          aarch64-linux-gnu-readelf -h build/ofono-server | grep -q 'Machine:.*AArch64'
 
-      - name: dopack
+      - name: Assemble deployment package
+        env:
+          BUILD_ID: ${{ github.sha }}
         run: |
-          mkdir -p output/6677
-          echo "#!/bin/sh" > start.sh
-          echo "cd /home/root/6677" >> start.sh
-          echo "chmod 755 *" >> start.sh
-          echo "./server &" >> start.sh
-          mv start.sh output/6677/
-          cp -r web/dist output/6677/
-          cp src/build/ofono-server output/6677/server
+          package_dir="release/6677"
+          mkdir -p "$package_dir"
+          install -m 0755 src/build/ofono-server "$package_dir/server"
+          cp -a web/dist "$package_dir/dist"
+          cat > "$package_dir/start.sh" <<'EOF'
+          #!/bin/sh
+          set -eu
+          cd /home/root/6677
+          exec ./server "${PORT:-6677}"
+          EOF
+          chmod 0755 "$package_dir/start.sh"
+          tar -C release -czf "UDX710-TOOLS-${BUILD_ID}.tar.gz" 6677
+          sha256sum "UDX710-TOOLS-${BUILD_ID}.tar.gz" > "UDX710-TOOLS-${BUILD_ID}.tar.gz.sha256"
 
-      - name: Upload artifact
+      - name: Upload deployment package
         uses: actions/upload-artifact@v4
         with:
-          name: udx710-tools
-          path: output
-
+          name: UDX710-TOOLS-${{ github.sha }}
+          path: |
+            UDX710-TOOLS-${{ github.sha }}.tar.gz
+            UDX710-TOOLS-${{ github.sha }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

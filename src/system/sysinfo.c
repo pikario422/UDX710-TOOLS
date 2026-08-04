@@ -13,6 +13,7 @@
 #include "dbus_core.h"
 #include "exec_utils.h"
 #include "ofono.h"
+#include "modem_profile.h"
 
 /* 读取文件内容 */
 static int read_file(const char *path, char *buf, size_t size) {
@@ -83,16 +84,18 @@ int get_current_slot(char *slot, char *ril_path) {
     }
 
     /* 解析路径 */
-    if (strstr(datacard, "/ril_0")) {
+    if (strstr(datacard, modem_profile_slot_modem_path(1))) {
         strcpy(slot, "slot1");
-        strcpy(ril_path, "/ril_0");
-    } else if (strstr(datacard, "/ril_1")) {
+        strncpy(ril_path, modem_profile_slot_modem_path(1), 63);
+        ril_path[63] = '\0';
+    } else if (strstr(datacard, modem_profile_slot_modem_path(2))) {
         strcpy(slot, "slot2");
-        strcpy(ril_path, "/ril_1");
+        strncpy(ril_path, modem_profile_slot_modem_path(2), 63);
+        ril_path[63] = '\0';
     } else {
         /* 其他路径格式，直接使用 */
-        strncpy(ril_path, datacard, 31);
-        ril_path[31] = '\0';
+        strncpy(ril_path, datacard, 63);
+        ril_path[63] = '\0';
     }
 
     g_free(datacard);
@@ -100,7 +103,7 @@ int get_current_slot(char *slot, char *ril_path) {
 }
 
 int get_signal_strength(char *strength, size_t size) {
-    char slot[16], ril_path[32];
+    char slot[16], ril_path[64];
     int strength_val = 0, dbm_val = 0;
 
     strcpy(strength, "N/A");
@@ -182,7 +185,7 @@ int get_system_info(SystemInfo *info) {
     get_serial(info->serial, sizeof(info->serial));
 
     /* SIM 卡槽 */
-    char ril_path[32];
+    char ril_path[64];
     if (get_current_slot(info->sim_slot, ril_path) == 0) {
         strncpy(info->network_mode, ril_path, sizeof(info->network_mode) - 1);
     }

@@ -11,20 +11,22 @@
 #include "airplane.h"
 #include "sysinfo.h"
 #include "ofono.h"
+#include "modem_profile.h"
 
 int send_at(const char *cmd, char **result) {
     GDBusConnection *conn = NULL;
     GVariant *ret = NULL;
     GError *error = NULL;
     int rc = -1;
-    char slot[16], ril_path[32];
+    char slot[16], ril_path[64];
 
     if (!cmd || !result) return -1;
     *result = NULL;
 
     /* 获取当前 RIL 路径 */
     if (get_current_slot(slot, ril_path) != 0 || strcmp(ril_path, "unknown") == 0) {
-        strcpy(ril_path, "/ril_0");  /* 默认使用 ril_0 */
+        strncpy(ril_path, modem_profile_default_modem_path(), sizeof(ril_path) - 1);
+        ril_path[sizeof(ril_path) - 1] = '\0';
     }
 
     /* 连接系统 D-Bus */
@@ -81,12 +83,13 @@ int get_airplane_mode(void) {
 }
 
 int set_airplane_mode(int enabled) {
-    char slot[16], ril_path[32];
+    char slot[16], ril_path[64];
     int online = enabled ? 0 : 1;  /* 飞行模式开启=离线, 关闭=在线 */
     
     /* 获取当前 RIL 路径 */
     if (get_current_slot(slot, ril_path) != 0 || strcmp(ril_path, "unknown") == 0) {
-        strcpy(ril_path, "/ril_0");  /* 默认使用 ril_0 */
+        strncpy(ril_path, modem_profile_default_modem_path(), sizeof(ril_path) - 1);
+        ril_path[sizeof(ril_path) - 1] = '\0';
     }
     
     /* 使用 ofono D-Bus 接口设置 modem 在线状态 */
@@ -152,7 +155,7 @@ int get_imei(char *imei, size_t size) {
     char *result = NULL;
     int rc = -1;
 
-    if (send_at("AT+SPIMEI?", &result) != 0 || !result) return -1;
+    if (send_at(modem_profile_command(MODEM_CMD_IMEI_QUERY), &result) != 0 || !result) return -1;
 
     /* 解析响应，提取 15 位数字 */
     char *lines = result;

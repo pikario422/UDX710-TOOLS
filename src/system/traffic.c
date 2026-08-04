@@ -30,18 +30,43 @@ typedef struct {
     int switch_on;
 } TrafficConfig;
 
-/* 读取流量配置 - 从SQLite数据库读取 */
-static TrafficConfig read_traffic_config(void) {
+static TrafficConfig g_traffic_config;
+static pthread_mutex_t g_traffic_config_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int g_traffic_config_loaded = 0;
+
+static TrafficConfig load_traffic_config(void) {
     TrafficConfig config;
     config.much = config_get_ll("traffic_much", 0);
     config.switch_on = config_get_int("traffic_switch", 0);
     return config;
 }
 
-/* 保存流量配置 - 写入SQLite数据库 */
+/* The control loop runs every 15 seconds, so it must not fork sqlite3 each time. */
+static TrafficConfig read_traffic_config(void) {
+    TrafficConfig config;
+    pthread_mutex_lock(&g_traffic_config_mutex);
+    if (g_traffic_config_loaded) {
+        config = g_traffic_config;
+        pthread_mutex_unlock(&g_traffic_config_mutex);
+        return config;
+    }
+    pthread_mutex_unlock(&g_traffic_config_mutex);
+
+    config = load_traffic_config();
+    pthread_mutex_lock(&g_traffic_config_mutex);
+    g_traffic_config = config;
+    g_traffic_config_loaded = 1;
+    pthread_mutex_unlock(&g_traffic_config_mutex);
+    return config;
+}
+
 static void save_traffic_config(TrafficConfig *config) {
     config_set_int("traffic_switch", config->switch_on);
     config_set_ll("traffic_much", config->much);
+    pthread_mutex_lock(&g_traffic_config_mutex);
+    g_traffic_config = *config;
+    g_traffic_config_loaded = 1;
+    pthread_mutex_unlock(&g_traffic_config_mutex);
 }
 
 

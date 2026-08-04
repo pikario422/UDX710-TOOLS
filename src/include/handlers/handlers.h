@@ -41,6 +41,18 @@ void handle_sms_config_save(struct mg_connection *c,
                             struct mg_http_message *hm);
 void handle_sms_fix_get(struct mg_connection *c, struct mg_http_message *hm);
 void handle_sms_fix_set(struct mg_connection *c, struct mg_http_message *hm);
+void handle_sms_email_get(struct mg_connection *c, struct mg_http_message *hm);
+void handle_sms_email_save(struct mg_connection *c, struct mg_http_message *hm);
+void handle_sms_email_test(struct mg_connection *c, struct mg_http_message *hm);
+void handle_sms_email_logs(struct mg_connection *c, struct mg_http_message *hm);
+
+/* Modem profile API */
+void handle_modem_profile_get(struct mg_connection *c,
+                              struct mg_http_message *hm);
+void handle_modem_profile_save(struct mg_connection *c,
+                               struct mg_http_message *hm);
+void handle_modem_profile_reset(struct mg_connection *c,
+                                struct mg_http_message *hm);
 
 /* OTA更新 API */
 void handle_update_version(struct mg_connection *c, struct mg_http_message *hm);

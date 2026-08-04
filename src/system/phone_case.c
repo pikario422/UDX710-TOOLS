@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include "phone_case.h"
+#include "modem_profile.h"
 #include "database.h"
 #include "exec_utils.h"
 
@@ -65,13 +66,14 @@ static int check_network_connected(void) {
  */
 static void execute_network_recovery(void) {
     char output[256];
+    const char *modem_path = modem_profile_default_modem_path();
     
     printf("[PhoneCase] 执行网络恢复操作...\n");
     
     /* 启用数据漫游 */
     run_command(output, sizeof(output), "dbus-send", 
         "--system", "--print-reply", "--dest=org.ofono",
-        "/ril_0", "org.ofono.ConnectionManager.SetProperty",
+        modem_path, "org.ofono.ConnectionManager.SetProperty",
         "string:RoamingAllowed", "variant:boolean:true", NULL);
     
     /* 设置自动连接 */
