@@ -23,7 +23,7 @@
 #define IDENTITY_CACHE_TTL_US (5 * G_USEC_PER_SEC * 60)
 
 typedef struct {
-    char ril_path[64] = "unknown";
+    char ril_path[64];
     char imei[20];
     char iccid[24];
     char imsi[20];
