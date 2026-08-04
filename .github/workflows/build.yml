@@ -24,24 +24,30 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Install aarch64 toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu file
-
       - name: Build frontend
         working-directory: web
         run: |
           npm ci
           npm run build
 
-      - name: Build backend
-        working-directory: src
+      - name: Build backend with legacy glibc toolchain
         run: |
-          make clean
-          make
-          file build/ofono-server
-          aarch64-linux-gnu-readelf -h build/ofono-server | grep -q 'Machine:.*AArch64'
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace/src \
+            ubuntu:18.04 \
+            bash -lc '
+              set -eux
+              sed -i "s|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g" /etc/apt/sources.list
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+              make clean
+              make
+            '
+          file src/build/ofono-server
+          sudo apt-get update
+          sudo apt-get install --yes binutils-aarch64-linux-gnu
+          aarch64-linux-gnu-readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
 
       - name: Assemble deployment package
         env:
