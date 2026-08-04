@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TARGET_TRIPLE: aarch64-linux-gnu
-      TARGET_GLIBC: '2.17'
+      TARGET_GLIBC: '2.27'
       ZIG_VERSION: 0.13.0
 
     steps:
@@ -41,16 +41,16 @@ jobs:
           mv "zig-linux-x86_64-${ZIG_VERSION}" .zig
           echo "$GITHUB_WORKSPACE/.zig" >> "$GITHUB_PATH"
 
-      - name: Build backend for glibc 2.17
+      - name: Build backend for glibc 2.27
         run: |
           target="${TARGET_TRIPLE}.${TARGET_GLIBC}"
           make -C src clean
-          make -C src CC="zig cc -target ${target}" STRIP="zig strip"
+          make -C src CC="zig cc -target ${target}" STRIP=:
           file src/build/ofono-server
           readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
-          ! readelf --version-info src/build/ofono-server | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])'
+          ! readelf --version-info src/build/ofono-server | grep -Eq 'GLIBC_2\.(2[89]|[3-9][0-9])'
 
-      - name: Build SMTP curl for glibc 2.17
+      - name: Build SMTP curl for glibc 2.27
         run: |
           target="${TARGET_TRIPLE}.${TARGET_GLIBC}"
           export CC="zig cc -target ${target}"
@@ -97,7 +97,7 @@ jobs:
           install -Dm755 "$GITHUB_WORKSPACE/.ci/curl-install/bin/curl" "$GITHUB_WORKSPACE/.ci/curl"
           file "$GITHUB_WORKSPACE/.ci/curl"
           readelf -h "$GITHUB_WORKSPACE/.ci/curl" | grep -q 'Machine:.*AArch64'
-          ! readelf --version-info "$GITHUB_WORKSPACE/.ci/curl" | grep -Eq 'GLIBC_2\.(1[89]|[2-9][0-9])'
+          ! readelf --version-info "$GITHUB_WORKSPACE/.ci/curl" | grep -Eq 'GLIBC_2\.(2[89]|[3-9][0-9])'
 
       - name: Assemble deployment package
         env:
