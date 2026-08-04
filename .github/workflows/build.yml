@@ -30,15 +30,14 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build backend with legacy glibc toolchain
+      - name: Build backend with target-compatible glibc toolchain
         run: |
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace/src \
-            ubuntu:18.04 \
+            ubuntu:20.04 \
             bash -lc '
               set -eux
-              sed -i "s|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g" /etc/apt/sources.list
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl ca-certificates xz-utils perl
               make clean
