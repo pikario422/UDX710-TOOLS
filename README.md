@@ -25,9 +25,10 @@ private AT commands are configured separately.
 
 ## Runtime Requirements
 
-The target device needs Linux aarch64, oFono, the system D-Bus socket, the
-`sqlite3` command line utility, and `curl`. For SMS email delivery, `curl -V`
-must list `SMTP` and `SMTPS`.
+The target device needs Linux aarch64, oFono, the system D-Bus socket, and the
+`sqlite3` command line utility. The automated deployment package includes a
+target-compatible curl with `SMTP` and `SMTPS` enabled; manual deployments must
+provide a curl with those protocols.
 
 The application database is `6677.db` in the server working directory. Do not
 edit it while the service is running. Use the web UI or API to change settings.
@@ -62,6 +63,7 @@ The executable reads static files from `./dist`, so deploy these files together:
 ```text
 /home/root/6677/
   server
+  curl
   start.sh
   dist/
 ```

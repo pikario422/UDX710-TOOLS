@@ -40,14 +40,58 @@ jobs:
               set -eux
               sed -i "s|archive.ubuntu.com|old-releases.ubuntu.com|g; s|security.ubuntu.com|old-releases.ubuntu.com|g" /etc/apt/sources.list
               apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl ca-certificates xz-utils perl
               make clean
               make
+              cd /tmp
+              curl -fsSLO https://www.openssl.org/source/old/1.1.1/openssl-1.1.1w.tar.gz
+              tar -xzf openssl-1.1.1w.tar.gz
+              cd openssl-1.1.1w
+              ./Configure linux-aarch64 no-shared no-tests \
+                --cross-compile-prefix=aarch64-linux-gnu- \
+                --prefix=/tmp/curl-deps
+              make -j2 build_libs
+              make install_sw
+              cd /tmp
+              curl -fsSLO https://curl.se/download/curl-7.88.1.tar.xz
+              tar -xf curl-7.88.1.tar.xz
+              cd curl-7.88.1
+              ./configure \
+                --host=aarch64-linux-gnu \
+                --prefix=/tmp/curl-install \
+                --with-openssl=/tmp/curl-deps \
+                --disable-shared \
+                --enable-static \
+                --without-zlib \
+                --without-libpsl \
+                --without-nghttp2 \
+                --without-brotli \
+                --without-zstd \
+                --without-libidn2 \
+                --disable-ldap \
+                --disable-ldaps \
+                --disable-rtsp \
+                --disable-dict \
+                --disable-telnet \
+                --disable-tftp \
+                --disable-pop3 \
+                --disable-imap \
+                --disable-smb \
+                --disable-gopher \
+                --disable-mqtt \
+                CPPFLAGS=-I/tmp/curl-deps/include \
+                LDFLAGS=-L/tmp/curl-deps/lib \
+                LIBS="-ldl -lpthread"
+              make -j2
+              make install
+              install -Dm755 /tmp/curl-install/bin/curl /workspace/.ci/curl
             '
           file src/build/ofono-server
+          file .ci/curl
           sudo apt-get update
-          sudo apt-get install --yes binutils-aarch64-linux-gnu
+          sudo apt-get install --yes binutils-aarch64-linux-gnu file
           aarch64-linux-gnu-readelf -h src/build/ofono-server | grep -q 'Machine:.*AArch64'
+          aarch64-linux-gnu-readelf -h .ci/curl | grep -q 'Machine:.*AArch64'
 
       - name: Assemble deployment package
         env:
@@ -56,11 +100,13 @@ jobs:
           package_dir="release/6677"
           mkdir -p "$package_dir"
           install -m 0755 src/build/ofono-server "$package_dir/server"
+          install -m 0755 .ci/curl "$package_dir/curl"
           cp -a web/dist "$package_dir/dist"
           cat > "$package_dir/start.sh" <<'EOF'
           #!/bin/sh
           set -eu
           cd /home/root/6677
+          export PATH="/home/root/6677:$PATH"
           exec ./server "${PORT:-6677}"
           EOF
           chmod 0755 "$package_dir/start.sh"

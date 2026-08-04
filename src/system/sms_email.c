@@ -19,6 +19,7 @@
 #define EMAIL_LOG_MAX_ROWS 200
 #define EMAIL_QUEUE_TERMINAL_MAX_ROWS 200
 #define EMAIL_QUEUE_PENDING_MAX_ROWS 200
+#define EMAIL_CURL_PATH "/home/root/6677/curl"
 
 static pthread_mutex_t g_email_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_email_cond = PTHREAD_COND_INITIALIZER;
@@ -76,6 +77,10 @@ static int config_complete(const SmsEmailConfig *config) {
            config->smtp_port > 0 && config->smtp_user[0] &&
            config->smtp_password[0] && config->from_addr[0] &&
            config->to_addr[0];
+}
+
+static const char *email_curl_path(void) {
+    return access(EMAIL_CURL_PATH, X_OK) == 0 ? EMAIL_CURL_PATH : "curl";
 }
 
 static int server_is_valid(const char *server) {
@@ -188,13 +193,13 @@ static int send_email(const SmsEmailConfig *config, const char *sender,
     snprintf(auth, sizeof(auth), "%s:%s", config->smtp_user, config->smtp_password);
     if (config->smtp_port == 465) {
         snprintf(url, sizeof(url), "smtps://%s:%d", config->smtp_server, config->smtp_port);
-        rc = run_command(result, result_size, "curl", "--silent", "--show-error", "--fail",
+        rc = run_command(result, result_size, email_curl_path(), "--silent", "--show-error", "--fail",
                          "--connect-timeout", "15", "--max-time", "60", "--url", url,
                          "--user", auth, "--mail-from", config->from_addr, "--mail-rcpt",
                          config->to_addr, "--upload-file", template_path, NULL);
     } else {
         snprintf(url, sizeof(url), "smtp://%s:%d", config->smtp_server, config->smtp_port);
-        rc = run_command(result, result_size, "curl", "--silent", "--show-error", "--fail",
+        rc = run_command(result, result_size, email_curl_path(), "--silent", "--show-error", "--fail",
                          "--connect-timeout", "15", "--max-time", "60", "--ssl-reqd",
                          "--url", url, "--user", auth, "--mail-from", config->from_addr,
                          "--mail-rcpt", config->to_addr, "--upload-file", template_path, NULL);

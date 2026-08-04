@@ -31,7 +31,7 @@ aarch64 C 程序，通过 oFono D-Bus 控制模组；前端使用 Vue 3。默认
 - Linux aarch64。
 - 正常工作的 oFono 和系统 D-Bus Socket。
 - `sqlite3` 命令行工具。
-- `curl`。使用短信邮件功能时，执行 `curl -V` 的输出必须包含 `SMTP` 和 `SMTPS`。
+- `curl`。自动构建包会附带启用 `SMTP` 和 `SMTPS` 的 curl，并由 `start.sh` 优先使用；手动部署时需要自行提供带这两个协议的 curl。
 
 数据库默认是服务工作目录中的 `6677.db`。服务运行时不要直接修改数据库，应通过
 Web 设置页或 API 修改配置。
@@ -66,6 +66,7 @@ make
 ```text
 /home/root/6677/
   server
+  curl
   start.sh
   dist/
 ```
